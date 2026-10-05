@@ -47,7 +47,8 @@ class AccountTests(unittest.TestCase):
         class Opener:
             def open(self, request, timeout):
                 requests.append((request.full_url, json.loads(request.data), timeout,
-                                 dict(request.header_items()).get("X-omnirush-client")))
+                                 dict(request.header_items()).get("X-omnirush-client"),
+                                 dict(request.header_items()).get("User-agent")))
                 if len(requests) == 1:
                     return Response(200, authorize)
                 if len(requests) == 2:
@@ -67,6 +68,7 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(requests[1][1], {"device_code": "device-secret"})
         self.assertEqual(requests[0][2], account.HTTP_TIMEOUT)
         self.assertEqual(requests[0][3], account.CLIENT_VALUE)
+        self.assertEqual(requests[0][4], account.USER_AGENT)
         browser.assert_called_once_with(authorize["verification_uri_complete"])
         sleep.assert_called_once_with(2.0)
         self.assertEqual(result, token)

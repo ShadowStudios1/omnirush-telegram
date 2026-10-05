@@ -19,6 +19,7 @@ DEFAULT_GATEWAY_URL = "https://omnirush.ai/omnirush/v1"
 # used by the packaged GUI. This is a product/version label, never a secret.
 CLIENT_HEADER = "X-OmniRush-Client"
 CLIENT_VALUE = "gui/3.1.1"
+USER_AGENT = "omnirush-telegram-portable/3.1.1"
 ACCOUNT_PATH = Path.home() / ".local/share/omnirush-telegram-portable/native/omnirush-account.json"
 HTTP_TIMEOUT = 15
 MAX_RESPONSE_BYTES = 256 * 1024
@@ -93,7 +94,7 @@ def _request(url: str, body: dict, hosts: set[str]) -> tuple[int, dict]:
         url,
         data=json.dumps(body, allow_nan=False).encode("utf-8"),
         headers={"Content-Type": "application/json", "Accept": "application/json",
-                 CLIENT_HEADER: CLIENT_VALUE},
+                 CLIENT_HEADER: CLIENT_VALUE, "User-Agent": USER_AGENT},
         method="POST",
     )
     opener = urllib.request.build_opener(_ApprovedRedirectHandler(hosts))
@@ -275,5 +276,5 @@ def authenticated_environment(base_env: dict[str, str] | None = None) -> dict[st
     return environment
 
 
-__all__ = ["ACCOUNT_PATH", "DEFAULT_GATEWAY_URL", "CLIENT_HEADER", "CLIENT_VALUE",
+__all__ = ["ACCOUNT_PATH", "DEFAULT_GATEWAY_URL", "CLIENT_HEADER", "CLIENT_VALUE", "USER_AGENT",
            "AccountError", "authenticated_environment", "load_credentials", "login"]

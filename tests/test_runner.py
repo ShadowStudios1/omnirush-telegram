@@ -15,7 +15,7 @@ from telegram_bridge.state import StateError, StateStore
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(dir="/tmp/opencode")
+        self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.state_path = self.root / "private/state.sqlite3"
         with StateStore(self.state_path):

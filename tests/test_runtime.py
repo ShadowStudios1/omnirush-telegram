@@ -13,7 +13,7 @@ from telegram_bridge import runtime
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(dir="/tmp/opencode")
+        self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.project = self.root / "project"
         self.project.mkdir()

@@ -43,7 +43,7 @@ def archive_bytes(extra=None, native="x86_64", selected=True, payload=None):
 
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(dir="/tmp/opencode")
+        self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "private/runtimes"
         self.version = "3.1.1"
         self.asset_name = "omnirush-linux-x64-3.1.1.tar.gz"
@@ -125,7 +125,7 @@ class ReleaseTests(unittest.TestCase):
     def test_size_cap_short_and_oversize_download(self):
         for response in (Response(b"short"), Response(b"too long"), Response(b"abc", {"Content-Length": "999"})):
             with self.subTest(response=response), patch.object(releases, "_open", return_value=response), \
-                    tempfile.TemporaryDirectory(dir="/tmp/opencode") as directory, self.assertRaises(releases.ReleaseError):
+                    tempfile.TemporaryDirectory() as directory, self.assertRaises(releases.ReleaseError):
                 releases._download({"browser_download_url": self.url}, Path(directory) / "archive", 3,
                                    hashlib.sha256(b"abc").hexdigest(), None)
 

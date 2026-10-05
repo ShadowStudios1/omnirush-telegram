@@ -28,7 +28,7 @@ def update(number=1, text="make a file", date=None):
 
 class PrivateTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="telegram-tests-", dir="/tmp/opencode")
+        self.temporary = tempfile.TemporaryDirectory(prefix="telegram-tests-")
         self.root = Path(self.temporary.name)
         self.project = self.root / "project"
         self.project.mkdir()
@@ -236,7 +236,7 @@ class CommandTests(PrivateTest):
 
 class StateAndConfigTests(unittest.TestCase):
     def test_lock_permissions_persistence_and_monotonic_offset(self):
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state/state.sqlite3"
             with StateStore(path) as state:
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -255,7 +255,7 @@ class StateAndConfigTests(unittest.TestCase):
                 self.assertEqual(reopened.get("offset"), 40)
 
     def test_config_private_file_and_scoped_root_validation(self):
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = root / "project"
             project.mkdir()
@@ -277,7 +277,7 @@ class StateAndConfigTests(unittest.TestCase):
                 load_config(config_path)
 
     def test_symlink_configuration_refused(self):
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "target").write_text("private")
             (root / "link").symlink_to(root / "target")

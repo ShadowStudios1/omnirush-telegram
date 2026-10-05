@@ -21,7 +21,7 @@ TOKEN = "999999:FAKE_TOKEN_FOR_PRODUCT_TESTS_ONLY"
 
 class ProductTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(dir="/tmp/opencode", prefix="product-tests-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="product-tests-")
         self.root = Path(self.tmp.name)
         self.project = self.root / "project"
         self.other = self.project / "other"

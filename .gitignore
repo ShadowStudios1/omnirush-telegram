@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.omnirush/
+.env
+.env.*
+config.json
+auth.json
+*.sqlite3*
+*.log
+*.deb
+*.AppImage
+*.tar.gz
+dist/
+build/
+*.egg-info/

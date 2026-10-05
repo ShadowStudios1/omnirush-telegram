@@ -15,6 +15,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 DEFAULT_GATEWAY_URL = "https://omnirush.ai/omnirush/v1"
+# The native OmniRush 3.1.1 account service expects the same client identity
+# used by the packaged GUI. This is a product/version label, never a secret.
+CLIENT_HEADER = "X-OmniRush-Client"
+CLIENT_VALUE = "gui/3.1.1"
 ACCOUNT_PATH = Path.home() / ".local/share/omnirush-telegram-portable/native/omnirush-account.json"
 HTTP_TIMEOUT = 15
 MAX_RESPONSE_BYTES = 256 * 1024
@@ -88,7 +92,8 @@ def _request(url: str, body: dict, hosts: set[str]) -> tuple[int, dict]:
     request = urllib.request.Request(
         url,
         data=json.dumps(body, allow_nan=False).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 CLIENT_HEADER: CLIENT_VALUE},
         method="POST",
     )
     opener = urllib.request.build_opener(_ApprovedRedirectHandler(hosts))
@@ -213,7 +218,7 @@ def login(ui, gateway_url: str | None = None) -> dict:
         "platform": platform.system().lower() or "linux",
     }, hosts)
     if not 200 <= status < 300:
-        raise AccountError("OmniRush account authorization could not be started; no credentials were changed.")
+        raise AccountError(f"OmniRush account authorization could not be started (HTTP {status}); no credentials were changed.")
     try:
         device_code = _text(authorization["device_code"], "OmniRush account authorization response was invalid.")
         user_code = _text(authorization["user_code"], "OmniRush account authorization response was invalid.", limit=256)
@@ -270,4 +275,5 @@ def authenticated_environment(base_env: dict[str, str] | None = None) -> dict[st
     return environment
 
 
-__all__ = ["ACCOUNT_PATH", "DEFAULT_GATEWAY_URL", "AccountError", "authenticated_environment", "load_credentials", "login"]
+__all__ = ["ACCOUNT_PATH", "DEFAULT_GATEWAY_URL", "CLIENT_HEADER", "CLIENT_VALUE",
+           "AccountError", "authenticated_environment", "load_credentials", "login"]

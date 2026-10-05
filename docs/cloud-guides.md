@@ -9,7 +9,7 @@ There is no safe or legitimate source of unlimited free AWS, model-provider, or 
 - **Telegram token:** create your own bot with `@BotFather`; it is not an AI token.
 - **Cloud credits:** AWS, Google Cloud, and Azure may offer new-account credits or limited free services, subject to eligibility, expiry, region, and billing rules.
 - **Model access:** OmniRush still needs a real authenticated model/provider account. A free VM does not make paid model inference free.
-- **Cloud credentials:** the bridge does not ask for cloud access keys in Telegram. Native provider login happens interactively in the VM terminal and is stored in private native paths.
+- **Cloud credentials:** the bridge does not ask for cloud access keys in Telegram. OmniRush account device login happens interactively in the VM terminal/browser and stores gateway credentials in private native paths.
 
 As checked on **2026-10-05**, the official pages describe these broad offers:
 
@@ -39,14 +39,14 @@ During the wizard:
 
 1. Select **Headless** for a cloud VM.
 2. Approve the pinned official runtime download if no native sidecar is installed.
-3. Run native provider login in the terminal when offered. Do not paste provider credentials into Telegram or shell arguments.
+3. Approve the OmniRush account device-login link in your browser when offered. Do not paste provider credentials into Telegram or shell arguments. This is not OpenCode's generic `auth login` selector.
 4. Create a narrow project root, such as `~/omnirush-projects`.
 5. Select a live model from the API catalog.
 6. Create a bot at `@BotFather` with `/newbot`, paste its token only into hidden setup input, and enter your numeric Telegram user ID.
 7. Keep `ASK` for the first test. Use `FULL` only after understanding that the agent runs with the VM user’s existing privileges.
 8. Choose the systemd user service when the wizard detects a working user manager.
 
-If the provider login is not ready, stop and use the explicit local command later:
+If the OmniRush account login is not ready, stop and use the explicit local command later:
 
 ```bash
 python3 omnirush.py login

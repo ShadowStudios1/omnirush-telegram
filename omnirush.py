@@ -24,7 +24,7 @@ def parser():
         "start": "Start user service or detach a supervised bot (no fallback reboot durability)",
         "stop": "Stop only owned services or a verified supervisor; preserve state",
         "restart": "Explicit stop then start; never reset operational state",
-        "login": "Native interactive provider login in the selected auth environment",
+        "login": "OmniRush account device login for the private native runtime",
         "run": "Foreground supervisor for terminals/containers; handles SIGTERM/Ctrl-C",
     }
     for name, description in descriptions.items():
@@ -67,6 +67,17 @@ def main(argv=None):
                 path = ensure_runtime(version=args.version)
             ui.say("Verified runtime: " + str(path) + ". Run setup explicitly to select it.", "ok")
             return 0
+        if args.command == "login":
+            from telegram_bridge.config import CONFIG_PATH
+            require_terminal()
+            if CONFIG_PATH.exists() or CONFIG_PATH.is_symlink():
+                config = load_config()
+                if services.is_running(config):
+                    raise installer.SetupError("Stop the running bot before changing its OmniRush account authentication.")
+                installer.login(config.executable, config.backend_mode, ui)
+            else:
+                installer.login(None, "headless", ui)
+            return 0
         config = load_config()
         if args.command == "status":
             ui.say(services.status(config))
@@ -79,10 +90,6 @@ def main(argv=None):
             ui.say(services.start(config))
         elif args.command == "run":
             return services.run(config)
-        elif args.command == "login":
-            if services.is_running(config):
-                raise installer.SetupError("Stop the running bot before changing its provider authentication.")
-            installer.login(config.executable, config.backend_mode, ui)
         elif args.command == "service":
             require_terminal()
             if args.action == "uninstall":
@@ -112,9 +119,10 @@ def main(argv=None):
         from telegram_bridge.agent import AgentError
         from telegram_bridge.telegram import TelegramError
         from telegram_bridge.state import StateError
+        from telegram_bridge.account import AccountError
         error = sys.exc_info()[1]
         safe_errors = (ConfigError, AgentError, TelegramError, StateError,
-                       installer.SetupError, services.ServiceError, TerminalError, EnvironmentError)
+                       installer.SetupError, services.ServiceError, TerminalError, EnvironmentError, AccountError)
         if isinstance(error, safe_errors):
             ui.say(str(error), "error")
         elif type(error) is RuntimeError:

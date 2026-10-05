@@ -42,7 +42,7 @@ def runtime_environment() -> dict[str, str]:
     """
     environment = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(("OPENCODE_", "OMNIRUSH_", "XDG_"))
+        if not key.startswith(("OPENCODE_", "OMNIRUSH_", "ENGINE_", "XDG_"))
     }
     private_directory(APP_DATA)
     private_directory(NATIVE_HOME)
@@ -55,6 +55,16 @@ def runtime_environment() -> dict[str, str]:
     return environment
 
 
+def authenticated_runtime_environment() -> dict[str, str]:
+    """Return the isolated runtime environment plus the signed-in account."""
+    from .account import authenticated_environment
+    environment = runtime_environment()
+    xdg = {key: value for key, value in environment.items() if key.startswith("XDG_")}
+    authenticated = authenticated_environment(environment)
+    authenticated.update(xdg)
+    return authenticated
+
+
 def serve() -> None:
     from .config import ConfigError, load_config
     config = load_config()
@@ -63,18 +73,22 @@ def serve() -> None:
     executable = Path(_executable(config.executable))
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise AgentError("Configured native sidecar is missing or not executable.")
-    environment = runtime_environment()
+    environment = authenticated_runtime_environment()
     os.umask(0o077)
     # No configurable host or port: the native service owns discovery and auth.
     os.execve(str(executable), [str(executable), "serve", "--service", "--hostname", "127.0.0.1"], environment)
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .account import AccountError
     parser = argparse.ArgumentParser(description="Portable OmniRush native runtime")
     parser.add_argument("command", choices=("serve",))
     parser.parse_args(argv)
     try:
         serve()
+    except AccountError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     except (AgentError, OSError):
         print("Native service could not start; check setup and private directory permissions.", file=sys.stderr)
         return 1
@@ -85,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["discover_executable", "runtime_environment", "serve", "main"]
+__all__ = ["discover_executable", "runtime_environment", "authenticated_runtime_environment", "serve", "main"]
 
 if __name__ == "__main__":
     raise SystemExit(main())

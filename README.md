@@ -21,7 +21,7 @@ cd omnirush-telegram
 1. Detects Linux, WSL, SSH/RDP, containers, architecture, libc, and systemd-user availability locally.
 2. Lets you choose **Headless** (recommended for cloud) or **Attach Desktop** (uses an already-running OmniRush desktop account).
 3. Reuses a verified native sidecar or downloads the pinned official OmniRush 3.1.1 Linux runtime rootlessly.
-4. Offers the native provider login in the terminal. Credentials are handled by the native CLI and are never captured by this project.
+4. Runs the real OmniRush account device login: it opens the OmniRush verification link, waits for browser approval, and stores only the private gateway credentials required by the native runtime. It does not call OpenCode's generic provider selector.
 5. Guides BotFather `/newbot`, accepts the token with hidden input, validates `getMe`, refuses an existing webhook, and asks for your numeric Telegram user ID.
 6. Selects a real project root/folder and reads the live provider/model catalog, including context limits.
 7. Defaults to `ASK`; `FULL` requires typing `FULL` during setup and can later be enabled only with the exact Telegram phrase shown by `/mode`.
@@ -138,7 +138,7 @@ cd omnirush-telegram
 | Consent prompts | Read them; the wizard never uses `sudo` or starts anything without asking |
 | Backend mode | **Headless** — the right choice for a cloud VM |
 | Native runtime | Approve the pinned official runtime download (~250 MB); it verifies the checksum |
-| Provider login | Run the native provider login in this terminal when offered. Credentials go to the native CLI, **never** to this project or to Telegram |
+| OmniRush account login | Approve the displayed OmniRush device link in a browser. Access/refresh credentials are stored in a private file outside the project; they never go to Telegram |
 | Project root | Create/select a folder, e.g. `/home/ubuntu/omnirush-projects` |
 | Model | Pick a model from the live catalog the wizard lists |
 | Bot token | See *BotFather* below |
@@ -257,7 +257,7 @@ Useful lifecycle commands:
 | `python3 omnirush.py run` | Foreground supervisor for containers/SSH/diagnostics |
 | `python3 omnirush.py stop` | Stop only this installation; preserves state |
 | `python3 omnirush.py restart` | Explicit stop then start |
-| `python3 omnirush.py login` | Run native provider login locally, interactively |
+| `python3 omnirush.py login` | Run OmniRush account device login locally, interactively |
 | `python3 omnirush.py service install --enable` | Install and optionally enable systemd user units |
 | `python3 omnirush.py service uninstall` | Remove only units managed by this project |
 | `python3 omnirush.py update --version 3.1.1` | Explicitly download a pinned runtime; never changes account/model |

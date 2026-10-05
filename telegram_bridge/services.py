@@ -58,7 +58,7 @@ def render_units(config, root=PROJECT_ROOT, python=None):
         "StandardInput=null\nStandardOutput=null\nStandardError=null\n"
     )
     limit = "StartLimitIntervalSec=120s\nStartLimitBurst=5\n"
-    dependency = f"Wants={BACKEND_UNIT}\nAfter={BACKEND_UNIT}\n" if config.backend_mode == "headless" else ""
+    dependency = f"Requires={BACKEND_UNIT}\nAfter={BACKEND_UNIT}\n" if config.backend_mode == "headless" else ""
     bot = (MARKER + "[Unit]\nDescription=Owner-only OmniRush Telegram bridge\n"
            + dependency + limit + "\n" + common
            + f"ExecStart={prefix} {unit_quote(Path(root) / 'bot.py', command=True)}\n"
@@ -186,10 +186,10 @@ def backend_process(config, *, stopping=None):
         try:
             client.health()
         except AgentError:
-            from .runtime import runtime_environment
+            from .runtime import authenticated_runtime_environment
             child = subprocess.Popen(
                 [config.executable, "serve", "--service", "--hostname", "127.0.0.1"],
-                cwd=PROJECT_ROOT, env=runtime_environment(), stdin=subprocess.DEVNULL,
+                cwd=PROJECT_ROOT, env=authenticated_runtime_environment(), stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             deadline = time.monotonic() + 30
@@ -243,7 +243,9 @@ def status(config):
         state = result.stdout.decode("utf-8", "replace").strip()
         if state not in {"active", "inactive", "failed", "activating", "deactivating", "reloading"}:
             state = "unknown"
-        return f"Systemd bridge: {state}. Desktop attach requires the desktop app to stay open."
+        placement = ("The private native backend is managed independently of the desktop GUI."
+                     if config.backend_mode == "headless" else "Desktop attach requires the desktop app to stay open.")
+        return f"Systemd bridge: {state}. {placement}"
     if _alive(config):
         ready = _primitives().state_locked(config.state_path)
         return "Supervisor: " + ("running (bot instance lock held)" if ready else "initializing / not ready") + ". No reboot durability."

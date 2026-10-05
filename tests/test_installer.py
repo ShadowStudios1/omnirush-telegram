@@ -187,15 +187,27 @@ class InstallerTests(unittest.TestCase):
         with patch("telegram_bridge.telegram.TelegramClient", return_value=transport):
             self.assertEqual(installer.telegram_identity(ui), ("123456:hidden", 42))
 
-    def test_native_login_inherits_terminal_not_capture(self):
+    def test_headless_login_uses_omnirush_account_wrapper_not_sidecar_auth(self):
         ui = self.ui()
         ui.confirm.return_value = True
         with patch.object(installer, "require_terminal"), \
-             patch.object(installer.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
-            self.assertTrue(installer.login("/path with spaces/sidecar", "desktop", ui))
-        self.assertEqual(run.call_args.args[0], ["/path with spaces/sidecar", "auth", "login"])
-        self.assertNotIn("stdin", run.call_args.kwargs)
-        self.assertNotIn("capture_output", run.call_args.kwargs)
+             patch("telegram_bridge.account.login", return_value={"gateway_url": "https://omnirush.ai/omnirush/v1", "access_token": "access", "refresh_token": "refresh"}) as login:
+            self.assertTrue(installer.login("/path with spaces/sidecar", "headless", ui))
+        login.assert_called_once_with(ui)
+
+    def test_desktop_login_only_directs_to_gui_account(self):
+        ui = self.ui()
+        with patch.object(installer, "require_terminal"), patch("telegram_bridge.account.login") as login:
+            self.assertFalse(installer.login("/path with spaces/sidecar", "desktop", ui))
+        login.assert_not_called()
+        self.assertIn("Settings > Account", str(ui.say.call_args_list))
+
+    def test_headless_empty_models_explains_gateway_entitlement(self):
+        client = Mock(backend_mode="headless")
+        client.models.return_value = []
+        with self.assertRaisesRegex(installer.SetupError, "account model entitlement"):
+            installer.select_model(self.ui(), client, Path("/project"), SimpleNamespace(model={"id": "old", "providerID": "old"}))
+        client.default_model.assert_not_called()
 
     def test_running_existing_config_refused_before_setup_side_effects(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -259,6 +271,17 @@ class InstallerTests(unittest.TestCase):
 
 
 class CLITests(unittest.TestCase):
+    def test_login_is_available_before_setup_has_saved_config(self):
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(environment, "refuse_root"), \
+             patch("telegram_bridge.cli_ui.require_terminal"), \
+             patch("telegram_bridge.config.CONFIG_PATH", Path(folder) / "missing.json"), \
+             patch("telegram_bridge.config.load_config") as load, \
+             patch.object(installer, "login", return_value=True) as login:
+            self.assertEqual(omnirush.main(["login"]), 0)
+        load.assert_not_called()
+        self.assertEqual(login.call_args.args[:2], (None, "headless"))
+
     def test_help_includes_lifecycle(self):
         stream = io.StringIO()
         with contextlib.redirect_stdout(stream), self.assertRaises(SystemExit) as raised:

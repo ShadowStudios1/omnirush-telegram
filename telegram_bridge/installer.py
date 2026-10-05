@@ -4,7 +4,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import os
-import subprocess
 from types import SimpleNamespace
 
 from .cli_ui import UI, require_terminal, safe_text
@@ -22,21 +21,19 @@ class SetupError(RuntimeError):
 
 def login(executable, backend_mode, ui):
     require_terminal()
-    ui.say("Native authentication runs in this terminal only; never paste credentials into Telegram.", "warn")
-    ui.say("Headless uses separate private provider/auth paths; Desktop login changes the desktop account.")
-    if not ui.confirm("Run native auth login for " + backend_mode + " now?"):
+    if backend_mode == "desktop":
+        ui.say("Desktop account login is handled by the OmniRush GUI: open Settings > Account and sign in there.", "warn")
+        ui.say("Keep the desktop app open; this installer does not sign into or import the desktop account.")
         return False
-    if backend_mode == "headless":
-        from .runtime import runtime_environment
-        environment = runtime_environment()
-    else:
-        environment = os.environ.copy()
-    # Deliberately inherit stdin/stdout/stderr. No credential argument, capture,
-    # subprocess log, or separate credential field in our configuration.
-    result = subprocess.run([str(executable), "auth", "login"], env=environment,
-                            check=False, shell=False)
-    if result.returncode:
-        raise SetupError("Native login did not complete. Account/configuration was preserved; retry explicitly when ready.")
+    ui.say("OmniRush account login runs in this terminal only; never paste credentials into Telegram.", "warn")
+    if not ui.confirm("Start OmniRush account login now?"):
+        return False
+    from .account import AccountError, login as account_login
+    try:
+        account_login(ui)
+    except AccountError as error:
+        raise SetupError(str(error)) from None
+    ui.say("OmniRush account login completed; native credentials saved privately outside the project.", "ok")
     return True
 
 
@@ -143,6 +140,10 @@ def model_entries(payload):
 def select_model(ui, client, directory, existing=None):
     with ui.busy("Reading actual agent provider/model catalog"):
         entries = model_entries(client.models(directory=str(directory)))
+        if not entries:
+            if getattr(client, "backend_mode", None) == "headless":
+                raise SetupError("OmniRush account is signed in, but this gateway reported no models. Check account model entitlement or gateway access.")
+            raise SetupError("The desktop reported no models. Sign in through OmniRush Settings > Account and check model access.")
         native_default = client.default_model(directory=str(directory))
         if isinstance(native_default, dict) and "data" in native_default:
             native_default = native_default["data"]
@@ -152,8 +153,6 @@ def select_model(ui, client, directory, existing=None):
             if not any(m["id"] == existing.model.get("id") and m["providerID"] == existing.model.get("providerID") for m, _ in entries):
                 ui.say("Existing model is not in the current API catalog; verify provider access before starting.", "warn")
             return dict(existing.model)
-    if not entries:
-        raise SetupError("No models reported by the agent. Finish native provider login/configuration and rerun setup.")
     default_label = "Native backend default (does not change account or model)"
     if isinstance(native_default, dict):
         default_label += f" — {native_default.get('providerID', '?')}/{native_default.get('id', '?')}"
@@ -213,10 +212,12 @@ def setup(ui=None):
         default=1 if existing and existing.backend_mode == "desktop" else 0)]
     if backend == "desktop":
         ui.say("Desktop attach cannot run independently of a logged-in, open desktop app. No account import or model switch is performed.", "warn")
+        ui.say("Sign into OmniRush GUI Settings > Account before continuing; desktop credentials are never imported.")
     elif existing and existing.backend_mode != "headless":
         ui.say("Headless auth is separate from Desktop. Desktop credentials are not copied.", "warn")
     executable = select_executable(ui, existing)
-    if backend == "headless" and ui.confirm("Open the native provider login flow? Existing private credentials are preserved if you skip."):
+    if backend == "headless":
+        ui.title("OmniRush account login")
         login(executable, backend, ui)
     roots, project = select_project(ui, existing)
     permission = permission_choice(ui, existing)
@@ -253,6 +254,8 @@ def setup(ui=None):
     save_private(data)
     config = load_config()
     ui.say("Private configuration saved. No live bot has been started yet.", "ok")
+    if backend == "headless":
+        ui.say("The native sidecar backend is available privately (not the desktop GUI); it will run autonomously only after explicit service/start consent.")
     if info.systemd_user:
         selected = ui.choose("Service lifecycle", ["Keep manual/foreground control", "Install systemd USER application services"])
         if selected == 1:

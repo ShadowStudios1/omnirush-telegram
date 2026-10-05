@@ -29,6 +29,7 @@ class UnitTests(unittest.TestCase):
             self.assertNotIn("User=root", contents)
             self.assertNotIn("0.0.0.0", contents)
         self.assertIn("-m telegram_bridge.runtime serve", units[services.BACKEND_UNIT])
+        self.assertIn("Requires=" + services.BACKEND_UNIT, units[services.BOT_UNIT])
         self.assertIn('"/python with spaces"', units[services.BOT_UNIT])
         self.assertIn("%%", units[services.BOT_UNIT])
         self.assertIn("$$", units[services.BOT_UNIT])
@@ -115,6 +116,35 @@ class UnitTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_backend_process_uses_authenticated_native_environment_and_owns_cleanup(self):
+        from telegram_bridge.agent import AgentError
+        client = Mock()
+        client.health.side_effect = [AgentError("not started"), None]
+        child = Mock()
+        child.poll.return_value = None
+        environment = {"OMNIRUSH_GATEWAY_URL": "https://omnirush.ai/omnirush/v1",
+                       "OMNIRUSH_ACCESS_TOKEN": "access"}
+        with patch.object(services, "_client", return_value=client), \
+             patch("telegram_bridge.runtime.authenticated_runtime_environment", return_value=environment), \
+             patch.object(services.subprocess, "Popen", return_value=child) as popen:
+            with services.backend_process(config("/private")) as active:
+                self.assertIs(active, client)
+                self.assertIs(active._portable_child, child)
+        self.assertEqual(popen.call_args.kwargs["env"], environment)
+        self.assertNotIn("access", popen.call_args.args[0])
+        child.terminate.assert_called_once()
+
+    def test_systemd_start_uses_bot_dependency_without_detached_fallback(self):
+        with patch.object(services, "is_running", return_value=False), \
+             patch.object(services, "units_installed", return_value=True), \
+             patch.object(services, "systemd_user_available", return_value=True), \
+             patch.object(services, "status", return_value="active"), \
+             patch.object(services, "_systemctl") as systemctl, \
+             patch.object(services.subprocess, "Popen") as popen:
+            self.assertEqual(services.start(config("/private")), "active")
+        systemctl.assert_called_once_with("start", services.BOT_UNIT)
+        popen.assert_not_called()
+
     def test_start_idempotent_while_running(self):
         with patch.object(services, "is_running", return_value=True), \
              patch.object(services.subprocess, "Popen") as popen, patch.object(services, "_systemctl") as systemctl:

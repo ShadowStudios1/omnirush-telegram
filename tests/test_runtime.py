@@ -98,10 +98,33 @@ class RuntimeTests(unittest.TestCase):
         with self.environment(), self.assertRaises(AgentError):
             runtime.runtime_environment()
 
+    def test_only_authenticated_runtime_environment_loads_private_account(self):
+        credentials = {"gateway_url": "https://omnirush.ai/omnirush/v1",
+                       "access_token": "native-access", "refresh_token": "native-refresh"}
+        with self.environment(), patch("telegram_bridge.account.load_credentials", return_value=credentials) as load, \
+             patch.dict(os.environ, {"OMNIRUSH_ACCESS_TOKEN": "desktop-access", "ENGINE_GATEWAY_URL": "https://wrong", "XDG_CONFIG_HOME": "/wrong"}):
+            plain = runtime.runtime_environment()
+            load.assert_not_called()
+            authenticated = runtime.authenticated_runtime_environment()
+        self.assertNotIn("OMNIRUSH_ACCESS_TOKEN", plain)
+        self.assertEqual(authenticated["OMNIRUSH_ACCESS_TOKEN"], "native-access")
+        self.assertEqual(authenticated["OMNIRUSH_GATEWAY_URL"], credentials["gateway_url"])
+        self.assertNotIn("ENGINE_GATEWAY_URL", authenticated)
+        self.assertNotIn("native-refresh", authenticated.values())
+        self.assertEqual(authenticated["XDG_CONFIG_HOME"], str(self.root / "data/native/config"))
+
+    def test_missing_account_errors_before_headless_api_launch(self):
+        agent = AgentClient(str(self.executable), "managed", backend_mode="headless")
+        with self.environment(), patch("telegram_bridge.account.load_credentials", return_value=None), \
+             patch("telegram_bridge.agent.subprocess.run") as run:
+            with self.assertRaisesRegex(AgentError, "OmniRush account is not signed in"):
+                agent.models()
+        run.assert_not_called()
+
     def test_managed_api_omits_server_and_passes_isolated_environment(self):
         agent = AgentClient(str(self.executable), "managed", permission_mode="full", backend_mode="headless")
         result = subprocess.CompletedProcess([], 0, '{"data":{"id":"ses_test"}}', "")
-        with patch("telegram_bridge.agent.runtime_environment", return_value={"XDG_CONFIG_HOME": "isolated"}), \
+        with patch("telegram_bridge.agent.AgentClient._authenticated_environment", return_value={"XDG_CONFIG_HOME": "isolated"}), \
                 patch("telegram_bridge.agent.subprocess.run", return_value=result) as run:
             session = agent.create_session(str(self.project))
         command = run.call_args.args[0]
@@ -115,7 +138,7 @@ class RuntimeTests(unittest.TestCase):
     def test_serve_executes_loopback_service_only(self):
         config = self.config(executable=str(self.executable), backend_mode="headless", server_url="managed")
         with patch("telegram_bridge.config.load_config", return_value=config), \
-                patch.object(runtime, "runtime_environment", return_value={"PATH": "/usr/bin"}), \
+                patch.object(runtime, "authenticated_runtime_environment", return_value={"PATH": "/usr/bin"}), \
                 patch.object(runtime.os, "umask"), patch.object(runtime.os, "execve") as execute:
             runtime.serve()
         self.assertEqual(execute.call_args.args, (str(self.executable),
@@ -177,7 +200,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_uncertain_headless_mutation_is_never_repeated(self):
         agent = AgentClient(str(self.executable), "managed", backend_mode="headless")
-        with patch("telegram_bridge.agent.runtime_environment", return_value={}), \
+        with patch("telegram_bridge.agent.AgentClient._authenticated_environment", return_value={}), \
                 patch("telegram_bridge.agent.subprocess.run", side_effect=subprocess.TimeoutExpired("fixture", 30)) as run, \
                 self.assertRaises(AgentUncertainError):
             agent.set_permissions("ses_test", "ask")

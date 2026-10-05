@@ -1,6 +1,7 @@
 """Authenticated, stdlib-only adapter for the installed OmniRush sidecar.
 
-No credentials or private configuration are read here. The CLI owns authentication.
+Headless invocations inject only the private OmniRush account's native environment.
+Desktop authentication remains owned by the desktop CLI.
 An uncertain write must be reconciled using its caller-supplied message ID before
 the caller decides what to do; this adapter never retries a mutation.
 """
@@ -180,7 +181,7 @@ class AgentClient:
                 errors="replace",
                 timeout=CLI_TIMEOUT,
                 shell=False,
-                **({"env": runtime_environment()} if self.backend_mode == "headless" else {}),
+                **({"env": self._authenticated_environment()} if self.backend_mode == "headless" else {}),
             )
         except subprocess.TimeoutExpired:
             if mutating:
@@ -207,6 +208,15 @@ class AgentClient:
                     "Agent returned an unreadable write response; its outcome is uncertain."
                 ) from None
             raise AgentError("Agent returned an unreadable response.") from None
+
+    @staticmethod
+    def _authenticated_environment() -> dict[str, str]:
+        from .account import AccountError
+        from .runtime import authenticated_runtime_environment
+        try:
+            return authenticated_runtime_environment()
+        except AccountError as error:
+            raise AgentError(str(error)) from None
 
     def call(self, method: str, path: str, body=None):
         """Return decoded JSON (or None for 204), never exposing CLI diagnostics."""

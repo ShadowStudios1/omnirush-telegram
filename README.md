@@ -29,6 +29,214 @@ cd omnirush-telegram
 
 Cloud walkthroughs, free-tier caveats, EC2/VM commands, persistent service steps, and cleanup commands are in [`docs/cloud-guides.md`](docs/cloud-guides.md).
 
+## AWS EC2 setup, step by step
+
+A complete, beginner-friendly walkthrough for running the bridge on a small always-on AWS EC2 Ubuntu VM. If you have never used a cloud server before, follow it top to bottom — every command is copy-paste, one at a time. Budget about 20 minutes.
+
+> **Cost note:** a Free Tier–eligible micro instance is enough to test. A free VM does **not** make model/provider usage free, and Free Tier limits change — check the AWS console and set a budget alert before you start.
+
+### What you need first
+
+- An AWS account (with a payment method on file).
+- Telegram installed on your phone or desktop.
+- An OmniRush provider/model account — you will sign in during setup.
+
+### Part 1 — Create the EC2 instance (in the AWS website)
+
+1. Sign in to the **AWS Management Console**.
+2. In the top-right corner pick a **region** close to you (for example `us-east-1`). Everything below happens in this region.
+3. In the search bar type **EC2** and open the **EC2** service.
+4. Click the orange **Launch instance** button.
+5. **Name and tags** → Name: `omnirush-telegram`.
+6. **Application and OS Images (Amazon Machine Image)** → choose **Ubuntu**, then **Ubuntu Server 24.04 LTS (HVM), SSD Volume Type**. Leave **Architecture** as **64-bit (x86)**. (arm64 is also supported.)
+7. **Instance type** → choose **t3.micro** (or **t2.micro**). These are usually Free Tier eligible. Do not pick a larger type unless you accept the cost.
+8. **Key pair (login)** → click **Create new key pair**.
+   - Key pair name: `omnirush-key`
+   - Key pair type: **RSA**; private key file format: **.pem**
+   - Click **Create key pair**. The file downloads **once** — you can never download it again. Treat it like a password: never share it, commit it, or paste it into a chat.
+9. **Network settings** → click **Edit**:
+   - **Allow SSH traffic from** → choose **My IP** (not "Anywhere").
+   - Leave everything else at the default. Do **not** open HTTP/HTTPS or any OmniRush port — the bridge only makes *outbound* connections, so no inbound port is needed.
+10. **Configure storage** → **20 GiB gp3** is a comfortable size for the runtime and your project.
+11. **Advanced details** → leave the defaults.
+12. Click **Launch instance**, then **View all instances**.
+13. Wait until **Instance state** is **Running** and **Status check** shows **2/2 checks passed**.
+14. Select the instance and copy its **Public IPv4 address** (looks like `18.234.5.6`). You will paste it into every SSH command below.
+
+### Part 2 — Connect to the instance from your computer
+
+Choose the block for your operating system. Replace `<PUBLIC_IP>` with the address from step 14.
+
+**Windows (PowerShell):**
+
+```powershell
+# Lock down the key file so Windows SSH accepts it (run once)
+icacls "$env:USERPROFILE\Downloads\omnirush-key.pem" /inheritance:r
+icacls "$env:USERPROFILE\Downloads\omnirush-key.pem" /grant:r "$env:USERNAME:R"
+
+# Connect
+ssh -i "$env:USERPROFILE\Downloads\omnirush-key.pem" ubuntu@<PUBLIC_IP>
+```
+
+**macOS / Linux:**
+
+```bash
+chmod 400 ~/Downloads/omnirush-key.pem
+ssh -i ~/Downloads/omnirush-key.pem ubuntu@<PUBLIC_IP>
+```
+
+The first connection asks `Are you sure you want to continue connecting?` — type `yes`.
+
+Success looks like a prompt ending in `ubuntu@ip-172-31-…:~$`. **From this point on, every command runs on the EC2 instance, not on your own computer.**
+
+### Part 3 — Install the project (one line at a time)
+
+1. Refresh the package list:
+
+```bash
+sudo apt-get update
+```
+
+2. Install Git and Python (Ubuntu 24.04 already ships Python 3.12):
+
+```bash
+sudo apt-get install -y git ca-certificates python3
+```
+
+3. Confirm Python is 3.10 or newer — it must print `3.10` or higher:
+
+```bash
+python3 --version
+```
+
+4. Download the project (it is public, so no login is needed):
+
+```bash
+git clone https://github.com/ShadowStudios1/omnirush-telegram.git
+```
+
+5. Enter the folder:
+
+```bash
+cd omnirush-telegram
+```
+
+6. Run the guided setup:
+
+```bash
+./setup.sh
+```
+
+> If `./setup.sh` reports `Permission denied`, run `chmod +x setup.sh` and retry — or simply `bash setup.sh`.
+
+### Part 4 — Answer the setup wizard
+
+`./setup.sh` starts a guided, animated wizard in this terminal. Answer each prompt:
+
+| Prompt | What to choose |
+| --- | --- |
+| Consent prompts | Read them; the wizard never uses `sudo` or starts anything without asking |
+| Backend mode | **Headless** — the right choice for a cloud VM |
+| Native runtime | Approve the pinned official runtime download (~250 MB); it verifies the checksum |
+| Provider login | Run the native provider login in this terminal when offered. Credentials go to the native CLI, **never** to this project or to Telegram |
+| Project root | Create/select a folder, e.g. `/home/ubuntu/omnirush-projects` |
+| Model | Pick a model from the live catalog the wizard lists |
+| Bot token | See *BotFather* below |
+| Owner ID | See *Your numeric ID* below |
+| Permission mode | Keep **ASK** for your first run |
+| systemd user service | Answer **yes** to install it |
+
+**BotFather — create the bot:**
+
+1. In Telegram, open a chat with `@BotFather`.
+2. Send `/newbot`.
+3. Give it a display name (anything), then a username **ending in `bot`** (for example `my_omnirush_bot`).
+4. BotFather replies with a token like `123456789:AA…`. Copy it and paste it into the wizard — the input is hidden and the token is stored outside the repository.
+
+**Your numeric ID — the one account allowed to use the bot:**
+
+- This is your personal Telegram **user ID** (a number), **not** your `@username` and **not** the bot's ID.
+- Easiest route: message `@userinfobot` and copy the number it returns. It is a third-party bot — never send it your bot token.
+
+### Part 5 — Start it and verify
+
+Run these one at a time:
+
+```bash
+python3 omnirush.py doctor
+```
+
+```bash
+python3 omnirush.py service install --enable --linger
+```
+
+```bash
+python3 omnirush.py start
+```
+
+```bash
+python3 omnirush.py status
+```
+
+`--linger` keeps your user services running after you close the SSH window (it never uses `sudo`). Confirm the service is live:
+
+```bash
+systemctl --user is-active omnirush-telegram-portable.service
+```
+
+It should print `active`.
+
+### Part 6 — Use it from Telegram
+
+1. Open Telegram and find your bot (the `@username` you created).
+2. Press **Start**.
+3. Send any normal message — it becomes a prompt for your OmniRush agent, and the completed reply comes back in the chat.
+4. Try `/status` to see the backend, project, thread, and mode.
+
+### Part 7 — Come back later
+
+Reconnect to the VM at any time:
+
+```bash
+ssh -i ~/Downloads/omnirush-key.pem ubuntu@<PUBLIC_IP>
+```
+
+```bash
+cd omnirush-telegram && python3 omnirush.py status
+```
+
+- The **Public IPv4 address changes** if you stop and start the instance — update `<PUBLIC_IP>` accordingly. An **Elastic IP** keeps a fixed address.
+- To intentionally restart the bridge: `python3 omnirush.py restart`.
+
+### Part 8 — Stop and clean up (avoid surprise bills)
+
+Stop the bridge:
+
+```bash
+python3 omnirush.py stop
+```
+
+Then in **AWS Console → EC2 → Instances**, select the instance and use **Instance state**:
+
+- **Stop** — keeps the disk, stops compute charges.
+- **Terminate** — deletes the instance and its disk.
+
+Set a budget alert under **Billing → Budgets** so a Free Tier boundary can never become a surprise bill.
+
+### If something goes wrong
+
+| Symptom | Fix |
+| --- | --- |
+| `Permission denied (publickey)` | Wrong key or username — the Ubuntu user is `ubuntu` |
+| `UNPROTECTED PRIVATE KEY FILE` (Windows) | Run the two `icacls` commands in Part 2 |
+| `./setup.sh: Permission denied` | Run `chmod +x setup.sh` and retry, or `bash setup.sh` |
+| Telegram error `409` | Another process is polling the same bot — stop the old bridge; this project never deletes a webhook silently |
+| Bot stops after you close SSH | Confirm `--linger` was used and `systemctl --user is-active …` says `active` |
+| `No model` | Run `python3 omnirush.py login` on the VM, then `doctor` |
+| Runtime rejected | The pinned runtime needs Linux x64/arm64 with glibc — Ubuntu 24.04 is fine, Alpine/musl is not |
+
+For Google Cloud, Azure, Oracle, WSL, and the container paths, see [`docs/cloud-guides.md`](docs/cloud-guides.md).
+
 ## First checks and lifecycle
 
 After setup, run the read-only checks before starting the bridge:
@@ -89,6 +297,8 @@ Inline buttons are owner-bound, expire, and are tied to the message that created
 ## Deployment choices
 
 ### Cloud VM / dedicated Linux server
+
+> **New to cloud servers?** The [AWS EC2 setup, step by step](#aws-ec2-setup-step-by-step) walkthrough above covers creating an instance and running these commands one at a time.
 
 Choose **Headless**. Keep the VM, network, provider access, and Telegram connectivity available. If a working systemd user manager is available:
 

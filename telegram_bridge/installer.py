@@ -159,11 +159,10 @@ def model_entries(payload):
 
 def select_model(ui, client, directory, existing=None):
     with ui.busy("Reading actual agent provider/model catalog"):
-        entries = model_entries(client.models(directory=str(directory)))
-        if not entries and getattr(client, "backend_mode", None) == "headless":
-            # The official CLI's account catalog is authoritative. This
-            # fallback also keeps setup useful if an engine starts before its
-            # generated config has been observed by /api/model.
+        if getattr(client, "backend_mode", None) == "headless":
+            # The authenticated account catalog is authoritative for headless
+            # mode. The engine also exposes its built-in public provider, so
+            # using /api/model here could silently offer the wrong models.
             from .account import AccountError, model_catalog
             try:
                 catalog = model_catalog()
@@ -175,13 +174,16 @@ def select_model(ui, client, directory, existing=None):
                            "limit": item.get("limits", {})}
                           for item in catalog]
             })
+            native_default = None
+        else:
+            entries = model_entries(client.models(directory=str(directory)))
+            native_default = client.default_model(directory=str(directory))
+            if isinstance(native_default, dict) and "data" in native_default:
+                native_default = native_default["data"]
         if not entries:
             if getattr(client, "backend_mode", None) == "headless":
                 raise SetupError("OmniRush account is signed in, but this gateway reported no models. Check account model entitlement or gateway access.")
             raise SetupError("The desktop reported no models. Sign in through OmniRush Settings > Account and check model access.")
-        native_default = client.default_model(directory=str(directory))
-        if isinstance(native_default, dict) and "data" in native_default:
-            native_default = native_default["data"]
     if existing and existing.model is not None:
         ui.say(f"Existing model: {existing.model.get('providerID', '?')}/{existing.model.get('id', '?')}")
         if ui.confirm("Keep the existing explicit model (no account/model change)?", default=True):

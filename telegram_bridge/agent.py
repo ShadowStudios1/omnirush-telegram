@@ -351,6 +351,12 @@ class AgentClient:
         return value
 
     def health(self) -> dict:
+        if self.backend_mode == "headless" and self.server_auth and not self._auto:
+            result = self.call("GET", "/api/health")
+            if not isinstance(result, dict) or result.get("healthy") is not True:
+                raise AgentError("The private headless backend did not report healthy.")
+            return {"version": "official-engine", "pid": 1,
+                    "urls": [self.server_url], "paths": {"tmp": "private"}}
         return self._server_info(self.call("GET", "/api/info"))
 
     def discover(self) -> str:

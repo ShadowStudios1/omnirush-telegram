@@ -140,7 +140,7 @@ class RuntimeTests(unittest.TestCase):
         authorization = "Basic " + base64.b64encode(b"opencode:pass").decode("ascii")
         agent = AgentClient(str(self.executable), "http://127.0.0.1:43123",
                             backend_mode="headless", server_auth=authorization)
-        result = subprocess.CompletedProcess([], 0, '{"version":"test","pid":1,"urls":[],"paths":{"tmp":"/tmp"}}', "")
+        result = subprocess.CompletedProcess([], 0, '{"healthy":true}', "")
         environment = {"PATH": "/usr/bin", "OMNIRUSH_ACCESS_TOKEN": "private-access"}
         response = Mock()
         response.getcode.return_value = 200
@@ -153,7 +153,7 @@ class RuntimeTests(unittest.TestCase):
              patch("telegram_bridge.agent.urllib.request.build_opener", return_value=opener) as build:
             agent.health()
         request = opener.open.call_args.args[0]
-        self.assertEqual(request.full_url, "http://127.0.0.1:43123/api/info")
+        self.assertEqual(request.full_url, "http://127.0.0.1:43123/api/health")
         self.assertEqual(request.get_header("Authorization"), authorization)
         self.assertNotIn("pass", request.full_url)
         build.assert_called_once()

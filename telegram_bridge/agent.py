@@ -245,10 +245,6 @@ class AgentClient:
             raise AgentError("Agent returned an unreadable response.") from None
 
     def _invoke_http(self, server_url: str, method: str, path: str, data: str | None):
-        if self.backend_mode == "headless":
-            # Preserve the existing account check and isolated config setup;
-            # HTTP itself carries only the loopback Basic credential below.
-            self._authenticated_environment()
         url = _loopback_url(server_url) + path
         headers = {"Accept": "application/json", "User-Agent": "omnirush-telegram-portable/3.1.1"}
         if self.server_auth:

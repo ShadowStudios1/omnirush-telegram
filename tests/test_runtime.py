@@ -171,13 +171,13 @@ class RuntimeTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         opener = Mock()
         opener.open.return_value = response
-        with patch.object(agent, "_authenticated_environment", return_value={
-                "OMNIRUSH_ACCESS_TOKEN": "private-access", "XDG_CONFIG_HOME": str(self.root / "data/native/config")}), \
+        with patch.object(agent, "_authenticated_environment") as environment, \
              patch("telegram_bridge.agent.urllib.request.build_opener", return_value=opener):
             self.assertEqual(agent.models(), [])
         request = opener.open.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), authorization)
         self.assertNotIn("private-access", request.full_url)
+        environment.assert_not_called()
 
     def test_private_basic_auth_rejects_malformed_and_unsupported_credentials(self):
         invalid = ["", "Bearer pass", "Basic !!!!", "Basic abc", "Basic A===", 123]

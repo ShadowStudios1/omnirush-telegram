@@ -131,12 +131,34 @@ def unit_quote(value, *, command=False):
     return '"' + value + '"'
 
 
+def unit_path(value):
+    """Escape a systemd path assignment without adding literal quote bytes."""
+    value = str(value)
+    if not value.startswith("/") or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ServiceError("Service working directories must be absolute and contain no control characters.")
+    escaped = []
+    for char in value:
+        if char == "%":
+            escaped.append("%%")
+        elif char == "\\":
+            escaped.append("\\x5c")
+        elif char == '"':
+            escaped.append("\\x22")
+        elif char == " ":
+            escaped.append("\\x20")
+        elif char == "\t":
+            escaped.append("\\x09")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
 def render_units(config, root=PROJECT_ROOT, python=None):
     python = python or sys.executable
     prefix = " ".join(unit_quote(p, command=True) for p in (python, "-u"))
     common = (
         "[Service]\nType=simple\n"
-        f"WorkingDirectory={unit_quote(root)}\n"
+        f"WorkingDirectory={unit_path(root)}\n"
         "UMask=0077\nRestart=on-failure\nRestartSec=10s\n"
         "TimeoutStopSec=35s\nKillMode=control-group\n"
         "Environment=PYTHONDONTWRITEBYTECODE=1\n"

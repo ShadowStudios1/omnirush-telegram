@@ -114,6 +114,7 @@ class UnitTests(unittest.TestCase):
         self.assertIn("-m telegram_bridge.runtime serve", units[services.BACKEND_UNIT])
         self.assertIn("Requires=" + services.BACKEND_UNIT, units[services.BOT_UNIT])
         self.assertIn('"/python with spaces"', units[services.BOT_UNIT])
+        self.assertIn("WorkingDirectory=/repo\\x20with\\x20spaces/%%/$/\\x22", units[services.BOT_UNIT])
         self.assertIn("%%", units[services.BOT_UNIT])
         self.assertIn("$$", units[services.BOT_UNIT])
 

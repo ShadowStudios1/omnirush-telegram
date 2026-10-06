@@ -256,8 +256,13 @@ def setup(ui=None):
         login(executable, backend, ui)
     roots, project = select_project(ui, existing)
     permission = permission_choice(ui, existing)
-    temporary_config = SimpleNamespace(executable=executable, server_url="managed" if backend == "headless" else "auto",
-                                       model=None, agent=None, permission_mode=permission, backend_mode=backend)
+    if backend == "headless":
+        server_url, server_auth = services.new_backend_endpoint()
+    else:
+        server_url, server_auth = "auto", None
+    temporary_config = SimpleNamespace(executable=executable, server_url=server_url,
+                                       server_auth=server_auth, model=None, agent=None,
+                                       permission_mode=permission, backend_mode=backend)
     @contextmanager
     def desktop():
         client = services._client(temporary_config)
@@ -270,7 +275,7 @@ def setup(ui=None):
         "telegram_token": token, "owner_id": owner,
         "default_project": str(project), "project_roots": [str(root) for root in roots],
         "executable": executable, "server_url": temporary_config.server_url,
-        "backend_mode": backend, "permission_mode": permission, "model": model,
+        "backend_mode": backend, "permission_mode": permission, "server_auth": server_auth, "model": model,
         "agent": existing.agent if existing else None,
         "state_path": str(existing.state_path if existing else STATE_PATH),
         "monitor_interval": existing.monitor_interval if existing else 5,

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from pathlib import Path
@@ -134,6 +135,83 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(body["permissions"], [{"action": "*", "resource": "*", "effect": "allow"}])
         self.assertEqual(session["id"], "ses_test")
         self.assertEqual(run.call_args.kwargs["env"], {"XDG_CONFIG_HOME": "isolated"})
+
+    def test_explicit_headless_endpoint_authenticates_discovery_without_secret_argv(self):
+        authorization = "Basic " + base64.b64encode(b"opencode:pass").decode("ascii")
+        agent = AgentClient(str(self.executable), "http://127.0.0.1:43123",
+                            backend_mode="headless", server_auth=authorization)
+        result = subprocess.CompletedProcess([], 0, '{"version":"test","pid":1,"urls":[],"paths":{"tmp":"/tmp"}}', "")
+        environment = {"PATH": "/usr/bin", "OMNIRUSH_ACCESS_TOKEN": "private-access"}
+        with patch("telegram_bridge.agent.AgentClient._authenticated_environment", return_value=environment), \
+             patch("telegram_bridge.agent.subprocess.run", return_value=result) as run:
+            agent.health()
+        command = run.call_args.args[0]
+        self.assertEqual(command, [str(self.executable), "api", "--server",
+                                  "http://127.0.0.1:43123", "GET", "/api/info"])
+        for secret in (authorization, "pass", "private-access"):
+            self.assertNotIn(secret, " ".join(command))
+        self.assertEqual(run.call_args.kwargs["env"], {
+            **environment, "OPENCODE_PASSWORD": "pass", "OPENCODE_SERVER_PASSWORD": "pass"})
+        self.assertNotIn("OPENCODE_PASSWORD", environment)
+        self.assertNotIn("OPENCODE_SERVER_PASSWORD", environment)
+
+    def test_explicit_headless_auth_uses_sanitized_private_account_environment(self):
+        authorization = "Basic " + base64.b64encode(b"opencode:pass").decode("ascii")
+        agent = AgentClient(str(self.executable), "http://127.0.0.1:43123",
+                            backend_mode="headless", server_auth=authorization)
+        credentials = {"gateway_url": "https://omnirush.ai/omnirush/v1",
+                       "access_token": "private-access", "refresh_token": "private-refresh"}
+        result = subprocess.CompletedProcess([], 0, '{"data":[]}', "")
+        with self.environment(), patch.dict(os.environ, {
+                "OPENCODE_PASSWORD": "desktop-pass", "OPENCODE_SERVER_PASSWORD": "desktop-pass",
+                "OPENCODE_SERVER_USERNAME": "desktop-user", "OPENCODE_SERVER_URL": "http://remote",
+                "OMNIRUSH_ACCESS_TOKEN": "desktop-access", "XDG_CONFIG_HOME": "/desktop"}), \
+             patch("telegram_bridge.account.load_credentials", return_value=credentials), \
+             patch("telegram_bridge.account.model_catalog", return_value=[]), \
+             patch("telegram_bridge.agent.subprocess.run", return_value=result) as run:
+            self.assertEqual(agent.models(), [])
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment["OPENCODE_PASSWORD"], "pass")
+        self.assertEqual(environment["OPENCODE_SERVER_PASSWORD"], "pass")
+        self.assertEqual(environment["OMNIRUSH_ACCESS_TOKEN"], "private-access")
+        self.assertEqual(environment["XDG_CONFIG_HOME"], str(self.root / "data/native/config"))
+        self.assertNotIn("OPENCODE_SERVER_USERNAME", environment)
+        self.assertNotIn("OPENCODE_SERVER_URL", environment)
+        for secret in ("desktop-pass", "desktop-access", "private-refresh"):
+            self.assertNotIn(secret, environment.values())
+
+    def test_private_basic_auth_rejects_malformed_and_unsupported_credentials(self):
+        invalid = ["", "Bearer pass", "Basic !!!!", "Basic abc", "Basic A===", 123]
+        for raw in (b"user:pass", b"opencode:", b"opencode", b":pass", b"opencode:pass\x00",
+                    b"opencode:pass\n", b"opencode:pass\x7f", b"opencode:pass word", b"opencode:\xff"):
+            invalid.append("Basic " + base64.b64encode(raw).decode("ascii"))
+        for authorization in invalid:
+            with self.subTest(authorization=authorization), \
+                 patch("telegram_bridge.agent.subprocess.run") as run, \
+                 self.assertRaisesRegex(AgentError, "Invalid private backend authorization"):
+                AgentClient(str(self.executable), "http://127.0.0.1:43123",
+                            backend_mode="headless", server_auth=authorization)
+            run.assert_not_called()
+
+    def test_explicit_headless_urls_require_loopback_and_port(self):
+        for url in ("http://example.com:43123", "http://0.0.0.0:43123", "http://[::]:43123",
+                    "http://127.0.0.1", "http://localhost", "http://[::1]", "http://127.0.0.1:",
+                    "http://127.0.0.1:0", "auto"):
+            with self.subTest(url=url), self.assertRaises(AgentError):
+                AgentClient(str(self.executable), url, backend_mode="headless")
+        for url in ("http://127.0.0.1:43123", "http://localhost:43123", "http://[::1]:43123"):
+            with self.subTest(url=url):
+                AgentClient(str(self.executable), url, backend_mode="headless")
+
+    def test_desktop_api_keeps_cli_owned_authentication(self):
+        agent = AgentClient(str(self.executable), "http://localhost")
+        result = subprocess.CompletedProcess([], 0, '{"data":[]}', "")
+        with patch("telegram_bridge.agent.AgentClient._authenticated_environment") as environment, \
+             patch("telegram_bridge.agent.subprocess.run", return_value=result) as run:
+            self.assertEqual(agent.models(), [])
+        environment.assert_not_called()
+        self.assertNotIn("env", run.call_args.kwargs)
+        self.assertNotIn("--header", run.call_args.args[0])
 
     def test_serve_executes_loopback_service_only(self):
         config = self.config(executable=str(self.executable), backend_mode="headless", server_url="managed")

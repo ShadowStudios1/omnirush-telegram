@@ -18,7 +18,8 @@ def main() -> int:
     try:
         config = load_config()
         agent = AgentClient(config.executable, config.server_url, config.model, config.agent,
-                            permission_mode=config.permission_mode, backend_mode=config.backend_mode)
+                            permission_mode=config.permission_mode, backend_mode=config.backend_mode,
+                            server_auth=config.server_auth)
         telegram = TelegramClient(config.token)
         if args.check:
             info = agent.health()

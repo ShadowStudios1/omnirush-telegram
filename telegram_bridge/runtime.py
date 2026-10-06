@@ -138,15 +138,15 @@ def _write_engine_config(gateway_url: str, catalog: list[dict]) -> Path:
 def serve() -> None:
     from .config import ConfigError, load_config
     config = load_config()
-    if config.backend_mode != "headless" or config.server_url != "managed":
-        raise ConfigError("Native service requires a headless managed configuration.")
+    if config.backend_mode != "headless" or config.server_url == "auto":
+        raise ConfigError("Native service requires a headless loopback configuration.")
     executable = Path(_executable(config.executable))
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise AgentError("Configured native sidecar is missing or not executable.")
-    environment = authenticated_runtime_environment()
+    from .services import backend_command, backend_environment
+    environment = backend_environment(config)
     os.umask(0o077)
-    # No configurable host or port: the native service owns discovery and auth.
-    os.execve(str(executable), [str(executable), "serve", "--service", "--hostname", "127.0.0.1"], environment)
+    os.execve(str(executable), backend_command(config), environment)
 
 
 def main(argv: list[str] | None = None) -> int:

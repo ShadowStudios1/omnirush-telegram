@@ -8,6 +8,7 @@ the caller decides what to do; this adapter never retries a mutation.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import os
@@ -127,6 +128,22 @@ def _id(value: str, prefix: str) -> str:
     return value
 
 
+def _server_password(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        if (not isinstance(value, str) or len(value) > 512
+                or re.fullmatch(r"Basic [A-Za-z0-9+/]+={0,2}", value) is None):
+            raise ValueError
+        raw = base64.b64decode(value[6:], validate=True).decode("ascii")
+        username, password = raw.split(":", 1)
+        if username != "opencode" or not password or any(not 33 <= ord(c) <= 126 for c in password):
+            raise ValueError
+        return password
+    except (ValueError, UnicodeError):
+        raise AgentError("Invalid private backend authorization.") from None
+
+
 class AgentClient:
     """Invoke the existing authenticated CLI; never start or configure a server.
 
@@ -142,6 +159,7 @@ class AgentClient:
         agent: str | None = None,
         permission_mode: str = "ask",
         backend_mode: str = "desktop",
+        server_auth: str | None = None,
     ) -> None:
         _executable(executable)
         if model is not None:
@@ -149,10 +167,12 @@ class AgentClient:
         _rules(permission_mode)
         if backend_mode not in ("desktop", "headless"):
             raise AgentError("Backend mode must be desktop or headless.")
-        if backend_mode == "headless" and server_url != "managed":
-            raise AgentError("Headless mode requires the managed native service.")
         if backend_mode == "desktop" and server_url == "managed":
             raise AgentError("Managed service requires headless mode.")
+        if backend_mode == "headless" and server_url != "managed":
+            if urlsplit(_loopback_url(server_url)).port is None:
+                raise AgentError("The private agent server must specify a loopback port.")
+        self._server_password = _server_password(server_auth)
         if agent is not None and (not isinstance(agent, str) or not agent):
             raise AgentError("Invalid agent selection.")
         self.executable = executable
@@ -162,6 +182,7 @@ class AgentClient:
         self.agent = agent
         self.permission_mode = permission_mode
         self.backend_mode = backend_mode
+        self.server_auth = server_auth
 
     def _invoke(self, server_url: str, method: str, path: str, data: str | None):
         command = [self.executable, "api"]
@@ -171,6 +192,12 @@ class AgentClient:
         if data is not None:
             command.extend(["--data", data])
         mutating = method not in ("GET", "HEAD", "OPTIONS")
+        environment = self._authenticated_environment() if self.backend_mode == "headless" else None
+        if environment is not None and server_url != "managed" and self._server_password is not None:
+            # V2 authenticates server discovery before processing API headers.
+            # Supply both native password names without exposing secrets in argv.
+            environment = {**environment, "OPENCODE_PASSWORD": self._server_password,
+                           "OPENCODE_SERVER_PASSWORD": self._server_password}
         try:
             result = subprocess.run(
                 command,
@@ -181,7 +208,7 @@ class AgentClient:
                 errors="replace",
                 timeout=CLI_TIMEOUT,
                 shell=False,
-                **({"env": self._authenticated_environment()} if self.backend_mode == "headless" else {}),
+                **({"env": environment} if environment is not None else {}),
             )
         except subprocess.TimeoutExpired:
             if mutating:

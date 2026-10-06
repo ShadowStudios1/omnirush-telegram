@@ -363,12 +363,12 @@ bot.py + telegram_bridge.bridge
         │ durable claims, project/thread scope, redacted visible replies
         ▼
 AgentClient ── desktop mode ──> existing loopback OmniRush sidecar
-            └─ headless mode ──> private native sidecar service
+            └─ headless mode ──> private native sidecar on an explicit loopback port
                                       │
                                       └─ provider auth/model/session APIs
 ```
 
-`telegram_bridge.releases` verifies a pinned GitHub release asset and extracts only the expected native sidecar member. `telegram_bridge.services` installs only marked systemd user units or manages a verified application supervisor. `telegram_bridge.runtime` binds the native server to loopback and uses separate XDG paths for headless auth/data.
+`telegram_bridge.releases` verifies a pinned GitHub release asset and extracts only the expected native sidecar member. `telegram_bridge.services` starts the official engine on a private loopback port with a private Basic-auth password, installs only marked systemd user units, or manages a verified application supervisor. `telegram_bridge.runtime` uses separate XDG paths for headless auth/data.
 
 ## Development
 

@@ -1,4 +1,4 @@
-import contextlib
+import base64
 import os
 from pathlib import Path
 import signal
@@ -14,6 +14,89 @@ from telegram_bridge import services
 def config(folder):
     return SimpleNamespace(executable="/native/sidecar", backend_mode="headless", permission_mode="ask",
                            model=None, agent=None, server_url="managed", state_path=Path(folder) / "state.sqlite3")
+
+
+def basic_auth(value="opencode:private-test-password"):
+    return "Basic " + base64.b64encode(value.encode("ascii")).decode("ascii")
+
+
+def explicit_config(permission="ask"):
+    cfg = config("/private")
+    cfg.server_url = "http://127.0.0.1:43123"
+    cfg.server_auth = basic_auth()
+    cfg.permission_mode = permission
+    return cfg
+
+
+class BackendConfigurationTests(unittest.TestCase):
+    def test_new_endpoint_uses_private_loopback_and_fixed_username(self):
+        probe = Mock()
+        probe.getsockname.return_value = ("127.0.0.1", 43123)
+        socket = Mock()
+        socket.__enter__ = Mock(return_value=probe)
+        socket.__exit__ = Mock(return_value=False)
+        with patch.object(services.socket, "socket", return_value=socket), \
+             patch.object(services.secrets, "token_urlsafe", return_value="private-test-password"):
+            endpoint, auth = services.new_backend_endpoint()
+        self.assertEqual(endpoint, "http://127.0.0.1:43123")
+        self.assertEqual(auth, basic_auth())
+        probe.bind.assert_called_once_with(("127.0.0.1", 0))
+
+    def test_invalid_explicit_endpoints_fail_before_authentication_or_spawn(self):
+        invalid = [None, 123, "auto", "https://127.0.0.1:43123", "http://127.0.0.1",
+                   "http://127.0.0.1:0", "http://127.0.0.1:65536", "http://127.0.0.1:bad",
+                   "http://localhost:43123", "http://0.0.0.0:43123", "http://[::1]:43123",
+                   "http://127.0.0.1:43123/path", "http://127.0.0.1:43123?secret=SECRET",
+                   "http://127.0.0.1:43123#SECRET", "http://user:SECRET@127.0.0.1:43123",
+                   "\nhttp://127.0.0.1:43123", "http://127.0.0.1:43123\n"]
+        for endpoint in invalid:
+            with self.subTest(endpoint=endpoint):
+                cfg = explicit_config()
+                cfg.server_url = endpoint
+                with patch("telegram_bridge.runtime.authenticated_runtime_environment") as environment, \
+                     patch.object(services, "_client") as client, \
+                     patch.object(services.subprocess, "Popen") as popen:
+                    for build in (services.backend_command, services.backend_environment):
+                        with self.assertRaisesRegex(services.ServiceError, "endpoint is invalid") as raised:
+                            build(cfg)
+                        self.assertNotIn("SECRET", str(raised.exception))
+                    with self.assertRaises(services.ServiceError):
+                        with services.backend_process(cfg):
+                            self.fail("Invalid backend must not start")
+                    environment.assert_not_called()
+                    client.assert_not_called()
+                    popen.assert_not_called()
+
+    def test_invalid_or_missing_explicit_auth_fails_without_spawning(self):
+        invalid = [None, "", 123, "Bearer SECRET", "Basic !!!", "Basic /w==",
+                   basic_auth("user:SECRET"), basic_auth("opencode:"), basic_auth("opencode"),
+                   basic_auth("opencode:SECRET\n"), basic_auth("opencode:SECRET\x7f"),
+                   basic_auth("opencode:two words"), basic_auth("opencode:" + "x" * 512)]
+        for auth in invalid:
+            with self.subTest(auth=auth):
+                cfg = explicit_config()
+                cfg.server_auth = auth
+                with patch("telegram_bridge.runtime.authenticated_runtime_environment") as environment, \
+                     patch.object(services, "_client") as client, \
+                     patch.object(services.subprocess, "Popen") as popen:
+                    for build in (services.backend_command, services.backend_environment):
+                        with self.assertRaisesRegex(services.ServiceError, "authorization is invalid") as raised:
+                            build(cfg)
+                        self.assertNotIn("SECRET", str(raised.exception))
+                    with self.assertRaises(services.ServiceError):
+                        with services.backend_process(cfg):
+                            self.fail("Unauthenticated backend must not start")
+                    environment.assert_not_called()
+                    client.assert_not_called()
+                    popen.assert_not_called()
+
+    def test_client_receives_explicit_auth_and_permission_policy(self):
+        for permission in ("ask", "full"):
+            with self.subTest(permission=permission), patch("telegram_bridge.agent.AgentClient") as client:
+                services._client(explicit_config(permission))
+                self.assertEqual(client.call_args.kwargs["server_auth"], basic_auth())
+                self.assertEqual(client.call_args.kwargs["permission_mode"], permission)
+                self.assertEqual(client.call_args.kwargs["backend_mode"], "headless")
 
 
 class UnitTests(unittest.TestCase):
@@ -131,8 +214,102 @@ class LifecycleTests(unittest.TestCase):
                 self.assertIs(active, client)
                 self.assertIs(active._portable_child, child)
         self.assertEqual(popen.call_args.kwargs["env"], environment)
+        self.assertEqual(popen.call_args.args[0], [
+            "/native/sidecar", "serve", "--service", "--hostname", "127.0.0.1",
+        ])
         self.assertNotIn("access", popen.call_args.args[0])
         child.terminate.assert_called_once()
+
+    def test_backend_process_uses_explicit_official_loopback_protocol(self):
+        from telegram_bridge.agent import AgentError
+        for permission in ("ask", "full"):
+            with self.subTest(permission=permission):
+                cfg = explicit_config(permission)
+                client = Mock()
+                client.health.side_effect = [AgentError("not started"), None]
+                child = Mock()
+                child.poll.return_value = None
+                environment = {"OMNIRUSH_ACCESS_TOKEN": "access", "OPENCODE_PASSWORD": "inherited-secret",
+                               "OPENCODE_SERVER_PASSWORD": "other-inherited-secret"}
+                with patch.object(services, "_client", return_value=client), \
+                     patch("telegram_bridge.runtime.authenticated_runtime_environment", return_value=environment), \
+                     patch.object(services.subprocess, "Popen", return_value=child) as popen:
+                    with services.backend_process(cfg) as active:
+                        self.assertIs(active._portable_child, child)
+                self.assertEqual(popen.call_args.args[0], [
+                    "/native/sidecar", "serve", "--hostname", "127.0.0.1", "--port", "43123",
+                ])
+                env = popen.call_args.kwargs["env"]
+                self.assertEqual(env["OPENCODE_SERVER_USERNAME"], "opencode")
+                self.assertEqual(env["OPENCODE_SERVER_PASSWORD"], "private-test-password")
+                self.assertEqual(env["OPENCODE_PASSWORD"], "private-test-password")
+                self.assertEqual(env["npm_config_audit"], "false")
+                self.assertEqual(popen.call_args.kwargs["stdout"], subprocess.DEVNULL)
+                self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.DEVNULL)
+                self.assertNotIn("private-test-password", " ".join(popen.call_args.args[0]))
+                self.assertNotIn(cfg.server_auth, "".join(services.render_units(cfg).values()))
+                popen.assert_called_once()
+                child.terminate.assert_called_once()
+                child.wait.assert_called_once_with(timeout=15)
+
+    def test_existing_backend_is_reused_without_spawn_or_cleanup(self):
+        for permission in ("ask", "full"):
+            with self.subTest(permission=permission):
+                client = Mock()
+                with patch.object(services, "_client", return_value=client), \
+                     patch.object(services, "backend_environment") as environment, \
+                     patch.object(services.subprocess, "Popen") as popen:
+                    with services.backend_process(explicit_config(permission)) as active:
+                        self.assertIs(active, client)
+                        self.assertIsNone(active._portable_child)
+                client.health.assert_called_once()
+                environment.assert_not_called()
+                popen.assert_not_called()
+
+    def test_backend_startup_exit_reports_only_status_and_does_not_retry(self):
+        from telegram_bridge.agent import AgentError
+        for code, expected in ((0, "exit status 0"), (2, "exit status 2"), (-15, "signal 15 (return code -15)")):
+            with self.subTest(code=code):
+                client = Mock()
+                client.health.side_effect = AgentError("SECRET diagnostic")
+                child = Mock()
+                child.poll.return_value = code
+                with patch.object(services, "_client", return_value=client), \
+                     patch.object(services, "backend_environment", return_value={"OPENCODE_PASSWORD": "SECRET"}), \
+                     patch.object(services.subprocess, "Popen", return_value=child) as popen, \
+                     patch.object(services, "_finish", wraps=services._finish) as finish, \
+                     patch.object(services.time, "sleep") as sleep:
+                    with self.assertRaises(services.ServiceError) as raised:
+                        with services.backend_process(explicit_config()):
+                            self.fail("Dead backend must never be yielded")
+                self.assertIn(expected, str(raised.exception))
+                self.assertIn("Check the private runtime configuration", str(raised.exception))
+                self.assertIn("No automatic retry", str(raised.exception))
+                self.assertNotIn("SECRET", str(raised.exception))
+                popen.assert_called_once()
+                client.health.assert_called_once()
+                sleep.assert_not_called()
+                finish.assert_called_once_with(child)
+                child.terminate.assert_not_called()
+                child.kill.assert_not_called()
+
+    def test_backend_readiness_timeout_stops_owned_child_and_hides_diagnostics(self):
+        from telegram_bridge.agent import AgentError
+        client = Mock()
+        client.health.side_effect = AgentError("SECRET diagnostic")
+        child = Mock()
+        child.poll.return_value = None
+        with patch.object(services, "_client", return_value=client), \
+             patch.object(services, "backend_environment", return_value={}), \
+             patch.object(services.subprocess, "Popen", return_value=child) as popen, \
+             patch.object(services.time, "monotonic", side_effect=[0, 31]):
+            with self.assertRaisesRegex(services.ServiceError, "not ready") as raised:
+                with services.backend_process(explicit_config()):
+                    self.fail("Unready backend must not be yielded")
+        self.assertNotIn("SECRET", str(raised.exception))
+        popen.assert_called_once()
+        child.terminate.assert_called_once()
+        child.wait.assert_called_once_with(timeout=15)
 
     def test_systemd_start_uses_bot_dependency_without_detached_fallback(self):
         with patch.object(services, "is_running", return_value=False), \

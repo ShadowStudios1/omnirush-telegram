@@ -28,6 +28,7 @@ class Config:
     roots: tuple[Path, ...]
     executable: str = DEFAULT_EXECUTABLE
     server_url: str = "auto"
+    server_auth: str | None = field(default=None, repr=False)
     model: dict | None = None
     agent: str | None = None
     state_path: Path = STATE_PATH
@@ -46,7 +47,7 @@ class Config:
                     or not 2 <= self.monitor_interval <= 60):
                 raise ValueError
             AgentClient(self.executable, self.server_url, self.model, self.agent,
-                        self.permission_mode, self.backend_mode)
+                        self.permission_mode, self.backend_mode, self.server_auth)
             if not self.roots or any(not isinstance(root, Path) for root in self.roots):
                 raise ValueError
             roots = tuple(_project_directory(root) for root in self.roots)
@@ -171,7 +172,8 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
             token=token, owner_id=owner,
             project=_project_directory(Path(data["default_project"])),
             roots=roots, executable=data.get("executable", DEFAULT_EXECUTABLE),
-            server_url=data.get("server_url", "auto"), model=data.get("model"),
+            server_url=data.get("server_url", "auto"), server_auth=data.get("server_auth"),
+            model=data.get("model"),
             agent=data.get("agent"), state_path=state, monitor_interval=interval,
             backend_mode=data.get("backend_mode", "desktop"),
             permission_mode=data.get("permission_mode", "ask"),

@@ -6,14 +6,18 @@ scheduler, public listener, privilege escalation, or firewall rule is created.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import fcntl
 import os
 from pathlib import Path
+import secrets
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 from .config import PROJECT_ROOT
 from .environment import systemd_user_available
@@ -27,6 +31,86 @@ UNIT_DIR = Path.home() / ".config/systemd/user"
 
 class ServiceError(RuntimeError):
     pass
+
+
+def new_backend_endpoint() -> tuple[str, str]:
+    """Reserve a loopback port and return its private Basic auth header."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", 0))
+            port = int(probe.getsockname()[1])
+        # OpenCode's loopback server uses the fixed username "opencode";
+        # only the password is secret. This matches both the bundled engine
+        # and the official CLI's managed-server client.
+        username = "opencode"
+        password = secrets.token_urlsafe(32)
+        encoded = base64.b64encode(f"{username}:{password}".encode("ascii")).decode("ascii")
+        return f"http://127.0.0.1:{port}", "Basic " + encoded
+    except (OSError, ValueError):
+        raise ServiceError("Could not allocate a private loopback backend endpoint.") from None
+
+
+def _backend_credentials(config):
+    value = getattr(config, "server_auth", None)
+    if value is None and config.server_url == "managed":
+        return None
+    try:
+        if not isinstance(value, str) or len(value) > 512 or not value.startswith("Basic "):
+            raise ValueError
+        raw = base64.b64decode(value[6:], validate=True).decode("ascii")
+        username, password = raw.split(":", 1)
+        if username != "opencode" or not password or any(not 33 <= ord(char) <= 126 for char in raw):
+            raise ValueError
+        return username, password
+    except (ValueError, UnicodeError):
+        raise ServiceError("Private backend authorization is invalid; rerun setup.") from None
+
+
+def _backend_port(config):
+    try:
+        endpoint = config.server_url
+        if not isinstance(endpoint, str):
+            raise ValueError
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+        # The native `serve` command speaks HTTP, and setup owns one exact
+        # IPv4 loopback listener. Do not accept credentials, paths, or hosts
+        # that its client could interpret differently from the server.
+        if port is None or not 1 <= port <= 65535 or endpoint != f"http://127.0.0.1:{port}":
+            raise ValueError
+        return port
+    except (ValueError, TypeError):
+        raise ServiceError("Private backend endpoint is invalid; rerun setup.") from None
+
+
+def backend_command(config) -> list[str]:
+    """Build the official engine's explicit loopback-server command."""
+    if config.server_url == "managed":
+        # Compatibility for configurations created before explicit endpoint
+        # credentials were added. New headless setup never uses this branch.
+        return [config.executable, "serve", "--service", "--hostname", "127.0.0.1"]
+    port = _backend_port(config)
+    _backend_credentials(config)
+    return [config.executable, "serve", "--hostname", "127.0.0.1", "--port", str(port)]
+
+
+def backend_environment(config):
+    from .runtime import authenticated_runtime_environment
+    if config.server_url != "managed":
+        _backend_port(config)
+    credentials = _backend_credentials(config)
+    environment = authenticated_runtime_environment()
+    if config.server_url != "managed":
+        environment["npm_config_audit"] = "false"
+    if credentials is not None:
+        username, password = credentials
+        environment["OPENCODE_SERVER_USERNAME"] = username
+        environment["OPENCODE_SERVER_PASSWORD"] = password
+        # The bundled V2 sidecar reads OPENCODE_PASSWORD before the official
+        # CLI's OPENCODE_SERVER_PASSWORD. Override both inherited values.
+        environment["OPENCODE_PASSWORD"] = password
+    return environment
 
 
 def _primitives():
@@ -162,7 +246,8 @@ def enable_linger():
 def _client(config):
     from .agent import AgentClient
     return AgentClient(config.executable, config.server_url, config.model, config.agent,
-                       permission_mode=config.permission_mode, backend_mode=config.backend_mode)
+                       permission_mode=config.permission_mode, backend_mode=config.backend_mode,
+                       server_auth=getattr(config, "server_auth", None))
 
 
 def _finish(child):
@@ -180,22 +265,28 @@ def _finish(child):
 def backend_process(config, *, stopping=None):
     """Own only the backend we create; never stop an existing managed backend."""
     from .agent import AgentError
+    command = backend_command(config)
     client = _client(config)
     child = None
     try:
         try:
             client.health()
         except AgentError:
-            from .runtime import authenticated_runtime_environment
             child = subprocess.Popen(
-                [config.executable, "serve", "--service", "--hostname", "127.0.0.1"],
-                cwd=PROJECT_ROOT, env=authenticated_runtime_environment(), stdin=subprocess.DEVNULL,
+                command, cwd=PROJECT_ROOT, env=backend_environment(config), stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             deadline = time.monotonic() + 30
             while True:
-                if (stopping is not None and stopping.is_set()) or child.poll() is not None:
+                if stopping is not None and stopping.is_set():
                     raise ServiceError("Headless backend stopped before becoming ready.")
+                code = child.poll()
+                if code is not None:
+                    status = f"exit status {code}" if code >= 0 else f"signal {-code} (return code {code})"
+                    raise ServiceError(
+                        f"Headless backend stopped before becoming ready ({status}). "
+                        "Check the private runtime configuration locally; auth/config was preserved. No automatic retry."
+                    ) from None
                 try:
                     client.health()
                     break

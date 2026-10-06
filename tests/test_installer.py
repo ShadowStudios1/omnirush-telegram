@@ -195,6 +195,16 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(installer.login("/path with spaces/sidecar", "headless", ui))
         login.assert_called_once_with(ui)
 
+    def test_headless_executable_selection_uses_official_cli_installer(self):
+        ui = self.ui()
+        runtime = SimpleNamespace(engine=Path("/private/official-cli/bin/omnirush"))
+        with patch.object(installer, "install_official_cli", return_value=runtime) as install:
+            self.assertEqual(
+                installer.select_executable(ui, backend_mode="headless"),
+                str(runtime.engine),
+            )
+        install.assert_called_once_with(ui)
+
     def test_desktop_login_only_directs_to_gui_account(self):
         ui = self.ui()
         with patch.object(installer, "require_terminal"), patch("telegram_bridge.account.login") as login:

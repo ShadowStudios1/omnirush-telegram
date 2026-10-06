@@ -8,6 +8,7 @@ private, versioned directory.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import base64
 import fcntl
@@ -20,6 +21,7 @@ import platform
 import stat
 import tarfile
 import tempfile
+import time
 from urllib.parse import urlsplit
 import urllib.error
 import urllib.request
@@ -310,6 +312,159 @@ def _runtime_at(root: Path, architecture: str, manifest: dict) -> OfficialCliRun
     return OfficialCliRuntime(root, engine, bun, AUTH_DIR)
 
 
+def _validate_install_lock(info: os.stat_result, name: str) -> None:
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size != 0):
+        raise CliRuntimeError(f"Refusing an unsafe {name} installer lock; it was preserved.")
+
+
+def _validate_owner_file(info: os.stat_result) -> None:
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size > 32):
+        raise CliRuntimeError("Refusing an unsafe official CLI lock owner; it was preserved.")
+
+
+def _revalidate_install_lock(root: Path, root_fd: int, name: str, fd: int) -> None:
+    """Check both the anchored directory and the lock's current pathname."""
+    for component in (root, *root.parents):
+        if component.is_symlink():
+            raise CliRuntimeError("Official CLI paths must not contain symlinks.")
+    root_info = root.stat(follow_symlinks=False)
+    opened_root = os.fstat(root_fd)
+    if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != os.getuid()
+            or (root_info.st_dev, root_info.st_ino) != (opened_root.st_dev, opened_root.st_ino)):
+        raise CliRuntimeError("The official CLI directory changed; installer locks were preserved.")
+    opened = os.fstat(fd)
+    current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    _validate_install_lock(opened, name)
+    _validate_install_lock(current, name)
+    if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+        raise CliRuntimeError("An official CLI installer lock changed; it was preserved.")
+
+
+def _pid_alive(pid: int) -> bool:
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _recover_stale_upstream_lock(root: Path, root_fd: int, *, stale_seconds: int = 60) -> bool:
+    """Remove one crashed official-CLI lock after verifying its owner is gone."""
+    name = ".install.lock"
+    try:
+        info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        return False
+    if time.time() - info.st_mtime <= stale_seconds:
+        return False
+    lock_path = root / name
+    owner_path = lock_path / "owner"
+    try:
+        owner_info = owner_path.stat(follow_symlinks=False)
+        if (not stat.S_ISREG(owner_info.st_mode) or owner_info.st_uid != os.getuid()
+                or owner_info.st_nlink != 1 or stat.S_IMODE(owner_info.st_mode) != 0o600
+                or owner_info.st_size > 32):
+            return False
+        raw = owner_path.read_text(encoding="ascii").strip()
+        pid = int(raw) if raw.isascii() and raw.isdigit() else 0
+        if not pid or _pid_alive(pid):
+            return False
+        if sorted(item.name for item in lock_path.iterdir()) != ["owner"]:
+            return False
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+    # The official CLI cannot create a replacement lock while this stale
+    # directory exists. Rename first, then remove only the validated owner
+    # file, so any later invocation sees either the old lock or no lock.
+    quarantine = f".install.lock.recovered-{pid}-{int(time.time())}"
+    try:
+        os.rename(name, quarantine, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+        quarantine_fd = os.open(quarantine, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=root_fd)
+        try:
+            owner_fd = os.open("owner", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=quarantine_fd)
+            try:
+                owner = os.fstat(owner_fd)
+                _validate_owner_file(owner)
+            finally:
+                os.close(owner_fd)
+            os.unlink("owner", dir_fd=quarantine_fd)
+        finally:
+            os.close(quarantine_fd)
+        os.rmdir(quarantine, dir_fd=root_fd)
+    except OSError:
+        # Preserve anything that could not be removed; the next invocation can
+        # inspect it rather than turning a partial cleanup into data loss.
+        return False
+    return True
+
+
+@contextmanager
+def _installation_lock(root: Path):
+    """Serialize portable installs without leaving an upstream lock file.
+
+    Keep the legacy flock linked and held until installation has finished, so
+    older portable installers cannot run concurrently.  On a fresh install an
+    empty compatibility guard serves the same purpose.  Upstream's directory
+    lock and other non-regular entries are never removed or followed.
+    """
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    portable_fd = None
+    legacy_fd = None
+    remove_legacy = False
+    try:
+        portable_name = ".portable-install.lock"
+        portable_fd = os.open(portable_name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                              0o600, dir_fd=root_fd)
+        _revalidate_install_lock(root, root_fd, portable_name, portable_fd)
+        fcntl.flock(portable_fd, fcntl.LOCK_EX)
+        _revalidate_install_lock(root, root_fd, portable_name, portable_fd)
+        _recover_stale_upstream_lock(root, root_fd)
+        legacy_name = ".install.lock"
+        try:
+            legacy_info = os.stat(legacy_name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            legacy_fd = os.open(legacy_name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                0o600, dir_fd=root_fd)
+        else:
+            if stat.S_ISREG(legacy_info.st_mode):
+                _validate_install_lock(legacy_info, legacy_name)
+                legacy_fd = os.open(legacy_name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=root_fd)
+            else:
+                raise CliRuntimeError(
+                    "An existing official CLI installer lock is not a private regular file; it was preserved."
+                )
+        if legacy_fd is not None:
+            _revalidate_install_lock(root, root_fd, legacy_name, legacy_fd)
+            try:
+                fcntl.flock(legacy_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise CliRuntimeError("An older portable CLI installer is active; its lock was preserved.") from None
+            _revalidate_install_lock(root, root_fd, legacy_name, legacy_fd)
+            remove_legacy = True
+        yield
+    finally:
+        try:
+            if remove_legacy:
+                _revalidate_install_lock(root, root_fd, ".install.lock", legacy_fd)
+                os.unlink(".install.lock", dir_fd=root_fd)
+        finally:
+            if legacy_fd is not None:
+                os.close(legacy_fd)
+            if portable_fd is not None:
+                os.close(portable_fd)
+            os.close(root_fd)
+
+
 def installed_cli() -> OfficialCliRuntime | None:
     architecture, _native = _architecture()
     final = INSTALL_ROOT / VERSION
@@ -326,17 +481,10 @@ def installed_cli() -> OfficialCliRuntime | None:
 
 def ensure_official_cli(progress=None) -> OfficialCliRuntime:
     """Install or verify exactly version 2.1.2 and return its engine and Bun."""
-    existing = installed_cli()
-    if existing is not None:
-        return existing
     architecture, _native = _architecture()
     root = _private_tree(INSTALL_ROOT, create=True)
-    lock_path = root / ".install.lock"
     try:
-        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        with _installation_lock(root):
             existing = installed_cli()
             if existing is not None:
                 return existing
@@ -375,8 +523,6 @@ def ensure_official_cli(progress=None) -> OfficialCliRuntime:
                 if temporary is not None:
                     import shutil
                     shutil.rmtree(temporary, ignore_errors=True)
-        finally:
-            os.close(fd)
     except CliRuntimeError:
         raise
     except (OSError, ValueError, TypeError):

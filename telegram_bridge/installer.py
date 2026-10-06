@@ -56,18 +56,7 @@ def login(executable, backend_mode, ui):
 
 def select_executable(ui, existing=None, backend_mode=None):
     if backend_mode == "headless":
-        from .cli_runtime import CliRuntimeError
-        try:
-            with ui.busy("Downloading and verifying official OmniRush CLI"):
-                runtime = ensure_official_cli()
-            install_launcher(runtime)
-        except CliRuntimeError as error:
-            raise SetupError(str(error)) from None
-        if not launcher_path_in_path():
-            ui.say("Official `omnirush` was installed at ~/.local/bin/omnirush, but ~/.local/bin is not in this shell's PATH.", "warn")
-            ui.say("Add `export PATH=\"$HOME/.local/bin:$PATH\"` to your shell profile yourself, then open a new shell. No shell files were edited.")
-        else:
-            ui.say("Official CLI launcher installed at ~/.local/bin/omnirush.", "ok")
+        runtime = install_official_cli(ui)
         return str(runtime.engine)
     from .agent import discover_executable
     found = existing.executable if existing and Path(existing.executable).is_file() and os.access(existing.executable, os.X_OK) else discover_executable()

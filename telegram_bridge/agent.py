@@ -17,6 +17,8 @@ import platform
 import re
 import subprocess
 from urllib.parse import urlencode, urlsplit, urlunsplit
+import urllib.error
+import urllib.request
 
 
 DEFAULT_EXECUTABLE = "/opt/OmniRush.ai/resources/sidecars/opencode-{}-unknown-linux-gnu".format(
@@ -185,6 +187,12 @@ class AgentClient:
         self.server_auth = server_auth
 
     def _invoke(self, server_url: str, method: str, path: str, data: str | None):
+        # Explicit headless endpoints are the official managed-server protocol.
+        # Calling HTTP directly avoids the CLI's separate service discovery
+        # layer, which can wait indefinitely while the loopback engine is
+        # already listening.
+        if server_url != "managed" and not self._auto and self.backend_mode == "headless" and self.server_auth:
+            return self._invoke_http(server_url, method, path, data)
         command = [self.executable, "api"]
         if server_url != "managed":
             command.extend(["--server", _loopback_url(server_url)])
@@ -234,6 +242,57 @@ class AgentClient:
                 raise AgentUncertainError(
                     "Agent returned an unreadable write response; its outcome is uncertain."
                 ) from None
+            raise AgentError("Agent returned an unreadable response.") from None
+
+    def _invoke_http(self, server_url: str, method: str, path: str, data: str | None):
+        if self.backend_mode == "headless":
+            # Preserve the existing account check and isolated config setup;
+            # HTTP itself carries only the loopback Basic credential below.
+            self._authenticated_environment()
+        url = _loopback_url(server_url) + path
+        headers = {"Accept": "application/json", "User-Agent": "omnirush-telegram-portable/3.1.1"}
+        if self.server_auth:
+            headers["Authorization"] = self.server_auth
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(url, data=data.encode("utf-8") if data is not None else None,
+                                         headers=headers, method=method)
+        mutating = method not in ("GET", "HEAD", "OPTIONS")
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request, timeout=CLI_TIMEOUT) as response:
+                status = int(response.getcode())
+                raw = response.read(4 * 1024 * 1024 + 1)
+        except urllib.error.HTTPError as response:
+            status = int(response.code)
+            try:
+                response.close()
+            except OSError:
+                pass
+            raw = b""
+        except urllib.error.URLError:
+            if mutating:
+                raise AgentUncertainError("Agent request failed; its outcome is uncertain. Do not retry automatically.") from None
+            raise AgentError("Agent read failed; check the running app and CLI authentication.") from None
+        except (OSError, ValueError):
+            if mutating:
+                raise AgentUncertainError("Agent request failed; its outcome is uncertain. Do not retry automatically.") from None
+            raise AgentError("Agent read failed; check the running app and CLI authentication.") from None
+        if len(raw) > 4 * 1024 * 1024:
+            if mutating:
+                raise AgentUncertainError("Agent returned an oversized write response; its outcome is uncertain.") from None
+            raise AgentError("Agent returned an oversized response.") from None
+        if not 200 <= status < 300:
+            if mutating:
+                raise AgentUncertainError("Agent request was rejected; its outcome is uncertain. Do not retry automatically.") from None
+            raise AgentError("Agent read failed; check the running app and CLI authentication.") from None
+        if not raw:
+            return None
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeError, ValueError, RecursionError):
+            if mutating:
+                raise AgentUncertainError("Agent returned an unreadable write response; its outcome is uncertain.") from None
             raise AgentError("Agent returned an unreadable response.") from None
 
     @staticmethod

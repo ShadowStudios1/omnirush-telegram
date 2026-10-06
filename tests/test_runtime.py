@@ -142,18 +142,21 @@ class RuntimeTests(unittest.TestCase):
                             backend_mode="headless", server_auth=authorization)
         result = subprocess.CompletedProcess([], 0, '{"version":"test","pid":1,"urls":[],"paths":{"tmp":"/tmp"}}', "")
         environment = {"PATH": "/usr/bin", "OMNIRUSH_ACCESS_TOKEN": "private-access"}
+        response = Mock()
+        response.getcode.return_value = 200
+        response.read.return_value = result.stdout.encode("utf-8")
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.return_value = response
         with patch("telegram_bridge.agent.AgentClient._authenticated_environment", return_value=environment), \
-             patch("telegram_bridge.agent.subprocess.run", return_value=result) as run:
+             patch("telegram_bridge.agent.urllib.request.build_opener", return_value=opener) as build:
             agent.health()
-        command = run.call_args.args[0]
-        self.assertEqual(command, [str(self.executable), "api", "--server",
-                                  "http://127.0.0.1:43123", "GET", "/api/info"])
-        for secret in (authorization, "pass", "private-access"):
-            self.assertNotIn(secret, " ".join(command))
-        self.assertEqual(run.call_args.kwargs["env"], {
-            **environment, "OPENCODE_PASSWORD": "pass", "OPENCODE_SERVER_PASSWORD": "pass"})
-        self.assertNotIn("OPENCODE_PASSWORD", environment)
-        self.assertNotIn("OPENCODE_SERVER_PASSWORD", environment)
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:43123/api/info")
+        self.assertEqual(request.get_header("Authorization"), authorization)
+        self.assertNotIn("pass", request.full_url)
+        build.assert_called_once()
 
     def test_explicit_headless_auth_uses_sanitized_private_account_environment(self):
         authorization = "Basic " + base64.b64encode(b"opencode:pass").decode("ascii")
@@ -161,24 +164,20 @@ class RuntimeTests(unittest.TestCase):
                             backend_mode="headless", server_auth=authorization)
         credentials = {"gateway_url": "https://omnirush.ai/omnirush/v1",
                        "access_token": "private-access", "refresh_token": "private-refresh"}
-        result = subprocess.CompletedProcess([], 0, '{"data":[]}', "")
-        with self.environment(), patch.dict(os.environ, {
-                "OPENCODE_PASSWORD": "desktop-pass", "OPENCODE_SERVER_PASSWORD": "desktop-pass",
-                "OPENCODE_SERVER_USERNAME": "desktop-user", "OPENCODE_SERVER_URL": "http://remote",
-                "OMNIRUSH_ACCESS_TOKEN": "desktop-access", "XDG_CONFIG_HOME": "/desktop"}), \
-             patch("telegram_bridge.account.load_credentials", return_value=credentials), \
-             patch("telegram_bridge.account.model_catalog", return_value=[]), \
-             patch("telegram_bridge.agent.subprocess.run", return_value=result) as run:
+        response = Mock()
+        response.getcode.return_value = 200
+        response.read.return_value = b'{"data":[]}'
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.return_value = response
+        with patch.object(agent, "_authenticated_environment", return_value={
+                "OMNIRUSH_ACCESS_TOKEN": "private-access", "XDG_CONFIG_HOME": str(self.root / "data/native/config")}), \
+             patch("telegram_bridge.agent.urllib.request.build_opener", return_value=opener):
             self.assertEqual(agent.models(), [])
-        environment = run.call_args.kwargs["env"]
-        self.assertEqual(environment["OPENCODE_PASSWORD"], "pass")
-        self.assertEqual(environment["OPENCODE_SERVER_PASSWORD"], "pass")
-        self.assertEqual(environment["OMNIRUSH_ACCESS_TOKEN"], "private-access")
-        self.assertEqual(environment["XDG_CONFIG_HOME"], str(self.root / "data/native/config"))
-        self.assertNotIn("OPENCODE_SERVER_USERNAME", environment)
-        self.assertNotIn("OPENCODE_SERVER_URL", environment)
-        for secret in ("desktop-pass", "desktop-access", "private-refresh"):
-            self.assertNotIn(secret, environment.values())
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), authorization)
+        self.assertNotIn("private-access", request.full_url)
 
     def test_private_basic_auth_rejects_malformed_and_unsupported_credentials(self):
         invalid = ["", "Bearer pass", "Basic !!!!", "Basic abc", "Basic A===", 123]

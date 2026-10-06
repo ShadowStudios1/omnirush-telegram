@@ -25,6 +25,7 @@ def parser():
         "stop": "Stop only owned services or a verified supervisor; preserve state",
         "restart": "Explicit stop then start; never reset operational state",
         "login": "OmniRush account device login for the private native runtime",
+        "install-cli": "Install or verify the official OmniRush CLI and launcher",
         "run": "Foreground supervisor for terminals/containers; handles SIGTERM/Ctrl-C",
     }
     for name, description in descriptions.items():
@@ -77,6 +78,10 @@ def main(argv=None):
                 installer.login(config.executable, config.backend_mode, ui)
             else:
                 installer.login(None, "headless", ui)
+            return 0
+        if args.command == "install-cli":
+            require_terminal()
+            installer.install_official_cli(ui)
             return 0
         config = load_config()
         if args.command == "status":

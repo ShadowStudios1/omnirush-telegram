@@ -19,6 +19,23 @@ class SetupError(RuntimeError):
     pass
 
 
+def install_official_cli(ui):
+    """Install or verify the official OmniRush CLI and private launcher."""
+    from .cli_runtime import CliRuntimeError, ensure_official_cli, install_launcher, launcher_path_in_path
+    try:
+        with ui.busy("Downloading and verifying official OmniRush CLI"):
+            runtime = ensure_official_cli()
+        install_launcher(runtime)
+    except CliRuntimeError as error:
+        raise SetupError(str(error)) from None
+    if not launcher_path_in_path():
+        ui.say("Official `omnirush` is installed at ~/.local/bin/omnirush, but that folder is not in this shell's PATH.", "warn")
+        ui.say('Run `export PATH="$HOME/.local/bin:$PATH"` for this shell, or open a new login shell.', "warn")
+    else:
+        ui.say("Official `omnirush` command installed and ready.", "ok")
+    return runtime
+
+
 def login(executable, backend_mode, ui):
     require_terminal()
     if backend_mode == "desktop":
@@ -37,7 +54,21 @@ def login(executable, backend_mode, ui):
     return True
 
 
-def select_executable(ui, existing=None):
+def select_executable(ui, existing=None, backend_mode=None):
+    if backend_mode == "headless":
+        from .cli_runtime import CliRuntimeError
+        try:
+            with ui.busy("Downloading and verifying official OmniRush CLI"):
+                runtime = ensure_official_cli()
+            install_launcher(runtime)
+        except CliRuntimeError as error:
+            raise SetupError(str(error)) from None
+        if not launcher_path_in_path():
+            ui.say("Official `omnirush` was installed at ~/.local/bin/omnirush, but ~/.local/bin is not in this shell's PATH.", "warn")
+            ui.say("Add `export PATH=\"$HOME/.local/bin:$PATH\"` to your shell profile yourself, then open a new shell. No shell files were edited.")
+        else:
+            ui.say("Official CLI launcher installed at ~/.local/bin/omnirush.", "ok")
+        return str(runtime.engine)
     from .agent import discover_executable
     found = existing.executable if existing and Path(existing.executable).is_file() and os.access(existing.executable, os.X_OK) else discover_executable()
     if found:
@@ -140,6 +171,21 @@ def model_entries(payload):
 def select_model(ui, client, directory, existing=None):
     with ui.busy("Reading actual agent provider/model catalog"):
         entries = model_entries(client.models(directory=str(directory)))
+        if not entries and getattr(client, "backend_mode", None) == "headless":
+            # The official CLI's account catalog is authoritative. This
+            # fallback also keeps setup useful if an engine starts before its
+            # generated config has been observed by /api/model.
+            from .account import AccountError, model_catalog
+            try:
+                catalog = model_catalog()
+            except AccountError:
+                catalog = []
+            entries = model_entries({
+                "data": [{"id": item["id"], "providerID": "omnirush",
+                           "name": item.get("display_name", item["id"]),
+                           "limit": item.get("limits", {})}
+                          for item in catalog]
+            })
         if not entries:
             if getattr(client, "backend_mode", None) == "headless":
                 raise SetupError("OmniRush account is signed in, but this gateway reported no models. Check account model entitlement or gateway access.")
@@ -215,7 +261,7 @@ def setup(ui=None):
         ui.say("Sign into OmniRush GUI Settings > Account before continuing; desktop credentials are never imported.")
     elif existing and existing.backend_mode != "headless":
         ui.say("Headless auth is separate from Desktop. Desktop credentials are not copied.", "warn")
-    executable = select_executable(ui, existing)
+    executable = select_executable(ui, existing, backend)
     if backend == "headless":
         ui.title("OmniRush account login")
         login(executable, backend, ui)
@@ -255,7 +301,7 @@ def setup(ui=None):
     config = load_config()
     ui.say("Private configuration saved. No live bot has been started yet.", "ok")
     if backend == "headless":
-        ui.say("The native sidecar backend is available privately (not the desktop GUI); it will run autonomously only after explicit service/start consent.")
+        ui.say("The official OmniRush CLI/native backend is installed privately; it will run autonomously only after explicit service/start consent.")
     if info.systemd_user:
         selected = ui.choose("Service lifecycle", ["Keep manual/foreground control", "Install systemd USER application services"])
         if selected == 1:

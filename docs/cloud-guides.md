@@ -38,13 +38,22 @@ cd omnirush-telegram
 During the wizard:
 
 1. Select **Headless** for a cloud VM.
-2. Approve the pinned official runtime download if no native sidecar is installed.
+2. Approve the official OmniRush CLI 2.1.2 download. It includes the native engine and bundled runtime; the setup also installs `~/.local/bin/omnirush`.
 3. Approve the OmniRush account device-login link in your browser when offered. Do not paste provider credentials into Telegram or shell arguments. This is not OpenCode's generic `auth login` selector.
 4. Create a narrow project root, such as `~/omnirush-projects`.
 5. Select a live model from the API catalog.
 6. Create a bot at `@BotFather` with `/newbot`, paste its token only into hidden setup input, and enter your numeric Telegram user ID.
 7. Keep `ASK` for the first test. Use `FULL` only after understanding that the agent runs with the VM user’s existing privileges.
 8. Choose the systemd user service when the wizard detects a working user manager.
+
+If the current shell says `omnirush: command not found` after setup, the CLI is normally installed but its private launcher directory is not on the current PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+omnirush doctor
+```
+
+The installer prints this exact command and does not silently modify `.profile` or `.bashrc`.
 
 If the OmniRush account login is not ready, stop and use the explicit local command later:
 

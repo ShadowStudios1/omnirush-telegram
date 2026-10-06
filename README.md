@@ -20,7 +20,7 @@ cd omnirush-telegram
 
 1. Detects Linux, WSL, SSH/RDP, containers, architecture, libc, and systemd-user availability locally.
 2. Lets you choose **Headless** (recommended for cloud) or **Attach Desktop** (uses an already-running OmniRush desktop account).
-3. Reuses a verified native sidecar or downloads the pinned official OmniRush 3.1.1 Linux runtime rootlessly.
+3. Downloads and verifies the official OmniRush CLI 2.1.2 for headless mode, including its bundled engine/Bun runtime, and installs a private `~/.local/bin/omnirush` launcher. Desktop attach continues to use an existing verified sidecar.
 4. Runs the real OmniRush account device login: it opens the OmniRush verification link, waits for browser approval, and stores only the private gateway credentials required by the native runtime. It does not call OpenCode's generic provider selector.
 5. Guides BotFather `/newbot`, accepts the token with hidden input, validates `getMe`, refuses an existing webhook, and asks for your numeric Telegram user ID.
 6. Selects a real project root/folder and reads the live provider/model catalog, including context limits.
@@ -28,6 +28,15 @@ cd omnirush-telegram
 8. Offers a systemd **user** service or a truthful manual/supervisor path. Nothing is started or enabled without consent.
 
 Cloud walkthroughs, free-tier caveats, EC2/VM commands, persistent service steps, and cleanup commands are in [`docs/cloud-guides.md`](docs/cloud-guides.md).
+
+After headless setup, if `omnirush` is not found in the current shell, run:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+omnirush doctor
+```
+
+The installer never edits shell startup files automatically.
 
 ## AWS EC2 setup, step by step
 

@@ -185,6 +185,36 @@ class AccountTests(unittest.TestCase):
                 account._request("https://omnirush.ai/device/token", {}, {"omnirush.ai"})
             self.assertNotIn("PRIVATE-RESPONSE", str(error.exception))
 
+    def test_model_catalog_fetches_public_gateway_models_and_sanitizes_fields(self):
+        credentials = {"gateway_url": "https://omnirush.ai/omnirush/v1",
+                       "access_token": "access", "refresh_token": "refresh"}
+        payload = {"data": [
+            {"id": "gpt-6-astra", "display_name": "Astra", "default": True,
+             "limits": {"context": 400000, "output": 128000},
+             "capabilities": {"reasoning": True, "tool_call": True, "private": "drop"},
+             "private": "drop"},
+            {"id": "bad id", "display_name": "ignore"},
+        ]}
+        with patch.object(account, "_get", return_value=(200, payload)) as get:
+            result = account.model_catalog(credentials)
+        self.assertEqual(result[0]["id"], "gpt-6-astra")
+        self.assertEqual(result[0]["limits"]["context"], 400000)
+        self.assertNotIn("private", result[0])
+        get.assert_called_once_with("https://omnirush.ai/omnirush/v1/models", "access", {"omnirush.ai"})
+
+    def test_official_auth_shape_is_accepted(self):
+        official = {"gatewayUrl": "https://omnirush.ai/omnirush/v1",
+                    "accessToken": "access", "refreshToken": "refresh"}
+        own_path = self.path.with_name("own.json")
+        official_path = self.path.with_name("official.json")
+        with patch.object(account, "ACCOUNT_PATH", own_path), \
+             patch.object(account, "OFFICIAL_AUTH_PATH", official_path):
+            account.OFFICIAL_AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+            account.OFFICIAL_AUTH_PATH.parent.chmod(0o700)
+            account.OFFICIAL_AUTH_PATH.write_text(json.dumps(official))
+            account.OFFICIAL_AUTH_PATH.chmod(0o600)
+            self.assertEqual(account.load_credentials()["access_token"], "access")
+
 
 if __name__ == "__main__":
     unittest.main()

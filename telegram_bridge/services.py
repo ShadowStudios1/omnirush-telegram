@@ -25,6 +25,7 @@ from .environment import systemd_user_available
 
 BOT_UNIT = "omnirush-telegram-portable.service"
 BACKEND_UNIT = "omnirush-telegram-portable-backend.service"
+BACKEND_READY_TIMEOUT = 90
 MARKER = "# Managed by omnirush-telegram-portable; application supervision only\n"
 UNIT_DIR = Path.home() / ".config/systemd/user"
 
@@ -276,7 +277,9 @@ def backend_process(config, *, stopping=None):
                 command, cwd=PROJECT_ROOT, env=backend_environment(config), stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            deadline = time.monotonic() + 30
+            # The official 1.18.x engine can bind its port before its database,
+            # config and provider graph are ready on a small EC2 instance.
+            deadline = time.monotonic() + BACKEND_READY_TIMEOUT
             while True:
                 if stopping is not None and stopping.is_set():
                     raise ServiceError("Headless backend stopped before becoming ready.")

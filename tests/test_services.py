@@ -302,7 +302,7 @@ class LifecycleTests(unittest.TestCase):
         with patch.object(services, "_client", return_value=client), \
              patch.object(services, "backend_environment", return_value={}), \
              patch.object(services.subprocess, "Popen", return_value=child) as popen, \
-             patch.object(services.time, "monotonic", side_effect=[0, 31]):
+             patch.object(services.time, "monotonic", side_effect=[0, 91]):
             with self.assertRaisesRegex(services.ServiceError, "not ready") as raised:
                 with services.backend_process(explicit_config()):
                     self.fail("Unready backend must not be yielded")

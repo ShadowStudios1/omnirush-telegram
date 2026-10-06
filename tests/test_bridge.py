@@ -361,7 +361,11 @@ class AgentTests(unittest.TestCase):
             agent.prompt("ses_test", "make file", "msg_test")
         args = run.call_args.args[0]
         self.assertEqual(args[1:6], ["api", "--server", "http://127.0.0.1:4096", "POST", "/api/session/ses_test/prompt"])
-        self.assertEqual(json.loads(args[-1]), {"id": "msg_test", "text": "make file", "delivery": "queue"})
+        self.assertEqual(json.loads(args[-1]), {
+            "id": "msg_test",
+            "prompt": {"text": "make file", "files": [], "agents": []},
+            "delivery": "queue",
+        })
         self.assertIs(run.call_args.kwargs["shell"], False)
 
     def test_agent_uncertain_write_never_retried(self):

@@ -497,7 +497,12 @@ class AgentClient:
         _id(message_id, "msg_")
         if not isinstance(text, str):
             raise AgentError("Prompt must be text.")
-        body = {"id": message_id, "text": text, "delivery": "queue"}
+        # OpenCode 1.18/V2 requires the prompt input under a nested `prompt`
+        # object. The older bridge payload put `text` at the top level, which
+        # the server rejected as "Missing key at [prompt]" without producing a
+        # Telegram reply.
+        body = {"id": message_id, "prompt": {"text": text, "files": [], "agents": []},
+                "delivery": "queue"}
         return self._data(self.call("POST", path, body), dict, mutating=True)
 
     def messages(self, session_id: str, limit: int = 100) -> list:
